@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+backend/data/*
+!backend/data/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+.env
+node_modules/
+.next/
