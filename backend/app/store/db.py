@@ -1,11 +1,12 @@
-"""SQLite 存储层（Q9：六字段 checkpoint 表 + runs/traces/usage，WAL）。
+"""SQLite 存储层 v2（Q9 六字段 + ctx_messages 完整消息 + runs.goal）。
 
 表：
-- runs:        一次任务运行的总账
-- checkpoints: 断点存档（run_id, step, done_actions, ctx_summary, ws_hash, tokens_used）
-- traces:      行车记录仪（JSONL 同构事件，摘要不进全文）
+- runs:        一次任务运行总账（含 goal：resume 重建上下文需要）
+- checkpoints: 断点存档（run_id, step, done_actions, ctx_messages, ctx_summary, ws_hash, tokens_used）
+- traces:      行车记录仪（JSONL 同构事件，摘要）
 - usage:       成本记账
 """
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id    TEXT PRIMARY KEY,
     task_id   TEXT NOT NULL,
+    goal      TEXT NOT NULL DEFAULT '',
     status    TEXT NOT NULL DEFAULT 'pending',   -- pending|running|paused|done|failed
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -23,9 +25,10 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS checkpoints (
     run_id     TEXT NOT NULL,
     step       INTEGER NOT NULL,
-    done_actions TEXT NOT NULL DEFAULT '[]',      -- JSON 数组：已完成动作，resume 不重放
-    ctx_summary  TEXT NOT NULL DEFAULT '',        -- 上下文摘要，续跑时喂 LLM
-    ws_hash      TEXT NOT NULL DEFAULT '',        -- 工作区文件哈希快照（漂移识别，M2）
+    done_actions TEXT NOT NULL DEFAULT '[]',      -- JSON：已完成动作，resume 不重放
+    ctx_messages TEXT NOT NULL DEFAULT '[]',      -- JSON：完整对话消息（resume 重建上下文）
+    ctx_summary  TEXT NOT NULL DEFAULT '',
+    ws_hash      TEXT NOT NULL DEFAULT '',
     tokens_used  INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL,
     PRIMARY KEY (run_id, step)
@@ -70,11 +73,12 @@ def _conn() -> sqlite3.Connection:
 
 
 # ---------------- runs ----------------
-def create_run(run_id: str, task_id: str) -> None:
+def create_run(run_id: str, task_id: str, goal: str = "") -> None:
     with _lock, _conn() as conn:
         conn.execute(
-            "INSERT INTO runs(run_id, task_id, status, created_at, updated_at) VALUES(?,?,?,?,?)",
-            (run_id, task_id, "pending", _now(), _now()),
+            "INSERT INTO runs(run_id, task_id, goal, status, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (run_id, task_id, goal, "pending", _now(), _now()),
         )
 
 
@@ -91,15 +95,17 @@ def get_run(run_id: str) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
 
 
-# ---------------- checkpoints（Q9 六字段） ----------------
-def save_checkpoint(run_id: str, step: int, done_actions: list, ctx_summary: str = "",
+# ---------------- checkpoints（Q9 六字段 + ctx_messages） ----------------
+def save_checkpoint(run_id: str, step: int, done_actions: list,
+                    ctx_messages: list | None = None, ctx_summary: str = "",
                     ws_hash: str = "", tokens_used: int = 0) -> None:
-    import json
     with _lock, _conn() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO checkpoints(run_id, step, done_actions, ctx_summary, ws_hash, tokens_used, created_at)"
-            " VALUES(?,?,?,?,?,?,?)",
-            (run_id, step, json.dumps(done_actions, ensure_ascii=False),
+            "INSERT OR REPLACE INTO checkpoints(run_id, step, done_actions, ctx_messages,"
+            " ctx_summary, ws_hash, tokens_used, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (run_id, step,
+             json.dumps(done_actions, ensure_ascii=False),
+             json.dumps(ctx_messages or [], ensure_ascii=False),
              ctx_summary, ws_hash, tokens_used, _now()),
         )
 
@@ -112,7 +118,7 @@ def last_checkpoint(run_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
-# ---------------- traces（Q13：一行一事件，只存摘要） ----------------
+# ---------------- traces（Q13） ----------------
 def append_trace(run_id: str, step: int, tool: str, args_summary: str,
                  output_summary: str, tokens: int = 0, verdict: str = "") -> None:
     with _lock, _conn() as conn:

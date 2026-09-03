@@ -33,7 +33,7 @@ def health() -> dict:
 @app.post("/api/tasks")
 def create_task(body: TaskCreate) -> dict:
     run_id = uuid.uuid4().hex[:12]
-    db.create_run(run_id, body.task_id)
+    db.create_run(run_id, body.task_id, body.goal)
     return {"run_id": run_id, "task_id": body.task_id, "status": "pending"}
 
 
@@ -47,14 +47,19 @@ def get_task(run_id: str) -> dict:
 
 @app.post("/api/tasks/{run_id}/resume")
 def resume_task(run_id: str) -> dict:
-    """从最后 checkpoint 续跑（M0：先提供读取能力，M1 接真恢复）。"""
+    """从最后 checkpoint 真续跑（需 .env 配好 ZHIPU_API_KEY）。"""
+    from .config import BASE_DIR as _BD
+    from .runtime import llm as _llm
+    from .runtime.loop import HarnessLoop
     run = db.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run 不存在")
-    cp = db.last_checkpoint(run_id)
-    return {
-        "run_id": run_id,
-        "status": run["status"],
-        "last_checkpoint": dict(cp) if cp else None,
-        "message": "resume stub: M1 接入真实续跑",
-    }
+    task_dir = _BD / "tasks" / run["task_id"]
+    if not task_dir.is_dir():
+        raise HTTPException(status_code=400, detail=f"任务目录不存在: {task_dir}")
+    try:
+        loop = HarnessLoop(task_dir, run["goal"] or "", lambda m: _llm.chat(m),
+                           run_id=run_id)
+        return loop.resume()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))

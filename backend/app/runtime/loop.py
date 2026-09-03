@@ -82,13 +82,43 @@ class HarnessLoop:
 
     # ---------- 对外入口 ----------
     def run(self) -> dict:
-        db.create_run(self.run_id, self.task_id)
+        """从头执行一次 run。"""
+        db.create_run(self.run_id, self.task_id, self.goal)
         db.update_run_status(self.run_id, "running")
-        self.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"任务目标：{self.goal}\n工作区已就绪，请开始。"},
-        ]
-        step = 0
+        self.messages = self._initial_messages(self.goal, fresh=True)
+        return self._run_loop(start_step=1)
+
+    def resume(self) -> dict:
+        """从最后 checkpoint 续跑（MVP 底线 2：进程被杀后不重放已完成动作）。"""
+        run = db.get_run(self.run_id)
+        if run is None:
+            raise LoopError(f"run 不存在: {self.run_id}")
+        db.update_run_status(self.run_id, "running")
+        cp = db.last_checkpoint(self.run_id)
+        if cp is None:
+            return self.run()
+        try:
+            self.done_actions = json.loads(cp["done_actions"] or "[]")
+        except json.JSONDecodeError:
+            self.done_actions = []
+        try:
+            self.messages = json.loads(cp["ctx_messages"] or "[]")
+        except json.JSONDecodeError:
+            self.messages = []
+        if not self.messages:
+            self.messages = self._initial_messages(run["goal"] or self.goal, fresh=False)
+        start = int(cp["step"]) + 1
+        print(f"[resume] 从 checkpoint step={cp['step']} 续跑，已完成 "
+              f"{len(self.done_actions)} 个动作（不重放）")
+        return self._run_loop(start_step=start)
+
+    def _initial_messages(self, goal: str, fresh: bool) -> list:
+        tail = "工作区已就绪，请开始。" if fresh else "工作区已就绪，请继续你上次未完成的修复。"
+        return [{"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": "任务目标：" + goal + chr(10) + tail}]
+
+    def _run_loop(self, start_step: int) -> dict:
+        step = start_step - 1
         try:
             while step < MAX_STEPS:
                 step += 1
@@ -99,10 +129,10 @@ class HarnessLoop:
                     db.update_run_status(self.run_id, "done")
                     self._checkpoint(step)
                     return self._summary("done", steps=step)
-                result = self._execute(act, step)
+                self._execute(act, step)
                 self._checkpoint(step)
             db.update_run_status(self.run_id, "paused")
-            return self._summary("paused", steps=MAX_STEPS)
+            return self._summary("paused", steps=step)
         except StepParseError as e:
             db.update_run_status(self.run_id, "failed")
             return self._summary("failed", reason=str(e), steps=step)
@@ -165,6 +195,7 @@ class HarnessLoop:
             run_id=self.run_id,
             step=step,
             done_actions=self.done_actions,
+            ctx_messages=self.messages,
             ctx_summary=json.dumps(self.messages, ensure_ascii=False)[-1500:],
             ws_hash=_ws_hash(self.workspace),
         )
