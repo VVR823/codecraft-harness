@@ -38,18 +38,28 @@ REPORT_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 def _restore_task(task_name: str) -> None:
-    """git 还原任务包到"带 bug 考卷"态（重试安全：每次跑前都从干净态开始）。"""
-    try:
-        subprocess.run(["git", "-C", str(REPO_ROOT), "restore", "--",
-                        f"backend/tasks/{task_name}"], check=True,
-                       capture_output=True)
-    except subprocess.CalledProcessError:
-        pass
+    """把任务包还原到"带 bug 考卷"态：git restore 还原 tracked 改动 + git clean 删 AI 新建的 untracked 文件。
+
+    两件事都要做——模型 write_file 可能新建文件（如 helper.py），restore 不删 untracked，
+    下一局 pytest 收集会被污染。幂等，重复调用安全。
+    """
+    for cmd in (
+        ["git", "-C", str(REPO_ROOT), "restore", "--", f"backend/tasks/{task_name}"],
+        ["git", "-C", str(REPO_ROOT), "clean", "-fd", "--", f"backend/tasks/{task_name}"],
+    ):
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            pass
 
 
 def run_once(task_name: str, model: str) -> dict:
-    """跑一个任务一次，返回结构化结果。"""
-    _restore_task(task_name)  # 确保从干净 bug 态开始（重试安全）
+    """跑一个任务一次，返回结构化结果。任何结束路径（含异常）都 git 还原任务包。
+
+    try/finally 保证：loop 抛异常（LLM 持续拒请求等）时任务包不留脏——这是换模型/杀进程
+    中断后最常见的脏状态来源（上一版 restore 只在正常路径执行，已实测留下 M 状态文件）。
+    """
+    _restore_task(task_name)  # 从干净 bug 态开始（重试/被杀重启都安全）
     task_dir = TASKS / task_name
     goal = (task_dir / "README.md").read_text(encoding="utf-8")
     usage_acc = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -65,33 +75,29 @@ def run_once(task_name: str, model: str) -> dict:
     db.init_db()
     loop = HarnessLoop(task_dir, goal, decider=decider)
     start = time.monotonic()
-    result = loop.run()
-    duration_s = round(time.monotonic() - start, 1)
-
-    # 全绿判定：status=done 且最后一次 run_tests 报告全绿（防"没跑测试就宣布完成"）
-    green = False
-    tests = [a for a in result["actions"] if a["tool"] == "run_tests"]
-    if result["status"] == "done" and tests:
-        green = "全绿" in tests[-1]["result_tail"]
-    if green:
-        db.bump_usage(loop.run_id, usage_acc["total_tokens"])
-
-    # 还原任务包（保持"带 bug 考卷"态）
     try:
-        subprocess.run(["git", "-C", str(REPO_ROOT), "restore", "--",
-                        f"backend/tasks/{task_name}"], check=True)
-    except subprocess.CalledProcessError:
-        pass
+        result = loop.run()
+        duration_s = round(time.monotonic() - start, 1)
 
-    return {
-        "task": task_name, "run_id": loop.run_id,
-        "status": result["status"], "green": green,
-        "steps": result["steps"],
-        "reason": (result.get("reason") or "")[:120],
-        "llm_calls": calls["n"],
-        "tokens": usage_acc["total_tokens"],
-        "duration_s": duration_s,
-    }
+        # 全绿判定：status=done 且最后一次 run_tests 报告全绿（防"没跑测试就宣布完成"）
+        green = False
+        tests = [a for a in result["actions"] if a["tool"] == "run_tests"]
+        if result["status"] == "done" and tests:
+            green = "全绿" in tests[-1]["result_tail"]
+        if green:
+            db.bump_usage(loop.run_id, usage_acc["total_tokens"])
+        ret = {
+            "task": task_name, "run_id": loop.run_id,
+            "status": result["status"], "green": green,
+            "steps": result["steps"],
+            "reason": (result.get("reason") or "")[:120],
+            "llm_calls": calls["n"],
+            "tokens": usage_acc["total_tokens"],
+            "duration_s": duration_s,
+        }
+    finally:
+        _restore_task(task_name)  # 无论成败都还原任务包（保持"带 bug 考卷"态）
+    return ret
 
 
 def run_once_with_retry(task_name: str, model: str, max_retry: int = 2) -> dict:
@@ -146,7 +152,7 @@ def fmt_md_table(rows: list[dict], model: str, repeat: int) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=None,
-                    help="模型名；不传用 config 默认(flash)。数字①建议 glm-4-air-250414")
+                    help="模型名；不传用 config 默认 glm-4.5-flash（免费稳健档，实测 6/6）")
     ap.add_argument("--repeat", type=int, default=1, help="每任务跑几次（预算基数建议 ≥2）")
     ap.add_argument("--retries", type=int, default=2,
                     help="单局未全绿时整局重试次数（自愈瞬时故障，默认 2）")
@@ -160,6 +166,15 @@ def main():
     else:
         model = args.model
     tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
+
+    # 清场（幂等）：上次被中断（换模型/杀进程）可能留下脏任务包 + DB 残留 running。
+    # 先还原所有任务包再开跑；残留 running 标 failed（记录层自愈，正常结束的 run 不可能是 running）。
+    db.init_db()
+    for t in tasks:
+        _restore_task(t)
+    stale = db.mark_stale_runs_failed()
+    if stale:
+        print(f"⚠️ 清理 {stale} 条残留 running 记录（上次中断遗留，已标 failed）")
 
     print(f"run_all 开始：{tasks} × {args.repeat} 次 | model={model} | 自愈重试≤{args.retries}")
     print("=" * 70)
@@ -187,7 +202,7 @@ def main():
     greens = sum(1 for r in rows if r["green"])
     print(f"\n汇总: 全绿 {greens}/{len(rows)}")
     if len(rows) and greens == len(rows):
-        print("🎉 3/3 全绿达成（数字① 最小证据）")
+        print(f"🎉 {greens}/{len(rows)} 全绿达成（数字① 证据）")
     else:
         print("未全绿——看明细定位失败任务（模型 or 任务包？）")
 

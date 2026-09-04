@@ -1,8 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
-backend/data/*
-!backend/data/.gitkeep
+data/*
+!data/.gitkeep
 *.db
 *.db-wal
 *.db-shm

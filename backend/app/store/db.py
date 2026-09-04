@@ -90,6 +90,19 @@ def update_run_status(run_id: str, status: str) -> None:
         )
 
 
+def mark_stale_runs_failed(status: str = "running") -> int:
+    """把历史残留指定状态的 run 标 failed（进程被杀时 loop 来不及标；run_all 启动时清场）。
+
+    正常流程的 run 最终都会落到 done/failed，残留 running 只可能是异常中断。
+    """
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE runs SET status='failed', updated_at=? WHERE status=?",
+            (_now(), status),
+        )
+        return cur.rowcount
+
+
 def get_run(run_id: str) -> sqlite3.Row | None:
     with _lock, _conn() as conn:
         return conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
