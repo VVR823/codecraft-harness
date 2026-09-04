@@ -35,9 +35,9 @@ def main():
     tests = [a for a in result["actions"] if a["tool"] == "run_tests"]
     if tests:
         last = tests[-1]["result_tail"]
-        green = "exit_code=0" in last
-        print(f"共跑测试 {len(tests)} 次；最后一次 exit_code=0（全绿）: {'PASS' if green else 'FAIL'}")
-        print("--- 最后一次测试尾部 ---")
+        green = "全绿" in last
+        print(f"共跑测试 {len(tests)} 次；最后一次全绿: {'PASS' if green else 'FAIL'}")
+        print("--- 最后一次测试结果 ---")
         print(last[-500:])
     else:
         print("注意: 全程没有调用 run_tests（异常行为，需排查）")

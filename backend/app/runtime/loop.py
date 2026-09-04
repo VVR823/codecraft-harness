@@ -15,39 +15,39 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 import uuid
 from pathlib import Path
 
 from ..config import LLM_RETRY, MAX_STEPS
 from ..store import db
-from ..tools.sandbox_exec import run_in_sandbox
+from ..tools.registry import (  # noqa: E402
+    Perm,
+    ToolError,
+    describe_tools,
+    get_tool,
+    list_tool_names,
+)
 from .protocol import AgentStep, StepParseError, parse_step
 
-SYSTEM_PROMPT = """你是一个软件工程师 Agent，正在执行一个代码任务。
+_SYSTEM_HEAD = """你是一个软件工程师 Agent，正在执行一个代码任务。
 每次输出必须是一段 JSON（不要多余文字），格式：
 {"thought": "这步在想什么", "tool": "read_file|write_file|run_tests", "args": {"...": "..."}, "done": false}
 - read_file: args={"path": "相对任务目录的路径"}
 - write_file: args={"path": "...", "content": "..."}，content 是文件全文
 - run_tests: args={}（跑任务目录的 pytest）
 - 当你确认任务已完成（测试全绿等），输出 {"thought": "...", "done": true}，不带 tool。
-工作区 = 任务目录（git 管理）。写完代码后必须 run_tests 验证，红了就继续读文件、修、再测。"""
+工作区 = 任务目录（git 管理）。写完代码后必须 run_tests 验证，红了就继续读文件、修、再测。
+注意：write_file 是【整文件覆盖】——content 必须包含该文件原有的所有 import/函数/docstring，
+绝不能只写你改的那一段（否则会误删其他代码导致 import 失败）。改长文件前先 read_file 拿到全文。"""
+
+SYSTEM_PROMPT = _SYSTEM_HEAD + "\n可用工具（注册表生成，与执行校验同源）:\n" + describe_tools()
 
 # 工具结果截断上限（防上下文爆炸的 v0 防线，正式分层压缩在 context.py）
 TOOL_OUTPUT_CAP = 3000
-READ_FILE_CAP = 6000
 
 
 class LoopError(Exception):
     pass
-
-
-def _path_in_workspace(workspace: Path, rel: str) -> Path:
-    """解析并校验路径必须落在 workspace 内（路径穿越拦截）。"""
-    p = (workspace / rel).resolve()
-    if not p.is_relative_to(workspace.resolve()):
-        raise LoopError(f"路径越界，拒绝: {rel}")
-    return p
 
 
 def _truncate(text: str, cap: int = TOOL_OUTPUT_CAP) -> str:
@@ -139,6 +139,8 @@ class HarnessLoop:
 
     # ---------- 决策（带 Q11 重试） ----------
     def _decide_once(self, step: int) -> AgentStep:
+        example = ('{"thought": "读文件看现状", "tool": "read_file",'
+                   ' "args": {"path": "utils.py"}, "done": false}')
         for attempt in range(LLM_RETRY + 1):
             try:
                 text = self.decider(list(self.messages))
@@ -146,43 +148,44 @@ class HarnessLoop:
             except StepParseError as e:
                 if attempt >= LLM_RETRY:
                     raise
-                # 把错误喂回模型要求重出（Q11：解析失败重试 ≤LLM_RETRY）
+                # 把错误喂回模型要求重出，并附合法格式示例（Q11：解析失败重试 ≤LLM_RETRY）
+                # 若错误疑似 JSON 语法（Expecting...），附转义规则教学——长 content 里
+                # 含代码引号/docstring 是免费模型的常见翻车点，光说"格式错"教不会
+                esc_hint = ""
+                if "Expecting" in str(e):
+                    esc_hint = (" JSON 字符串必须用双引号包裹；字符串内部的每个双引号都要写成"
+                                "\\\"（反斜杠+引号），换行要写成\\n；绝不能把整段内容用 Python 的"
+                                "三引号(\"\"\")或单引号(')包裹。")
                 self.messages.append({"role": "user",
-                                      "content": f"你上一步输出不是合法 JSON 决策（{e}）。请只输出一段合规 JSON。"})
+                                      "content": f"你上一步输出不是合法 JSON 决策（{e}）。"
+                                                 f"{esc_hint}\n合法格式示例: {example}"
+                                                 "\n请只输出一段合规 JSON，不要解释。"})
         raise StepParseError("unreachable")  # pragma: no cover
 
     # ---------- 工具执行 ----------
     def _execute(self, act: AgentStep, step: int) -> dict:
         tool = act.tool.value if act.tool else ""
         args = act.args or {}
-        verdict = "ok"
-        if act.tool is None or act.tool.value == "read_file":
-            path = _path_in_workspace(self.workspace, str(args.get("path", "")))
-            if not path.is_file():
-                raise LoopError(f"文件不存在: {path}")
-            content = path.read_text(encoding="utf-8", errors="replace")
-            output = _truncate(content, READ_FILE_CAP)
-        elif act.tool.value == "write_file":
-            path = _path_in_workspace(self.workspace, str(args.get("path", "")))
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(str(args.get("content", "")), encoding="utf-8")
-            output = f"已写入 {path.relative_to(self.workspace)}（{len(str(args.get('content','')))} 字符）"
-        elif act.tool.value == "run_tests":
-            r = run_in_sandbox(self.workspace)
-            out = (r["stdout"] or "") + ("\n[stderr]\n" + r["stderr"] if r["stderr"] else "")
-            tail = "\n".join(out.splitlines()[-25:])  # 只留尾部 summary 区
-            output = (f"exit_code={r['exit_code']} timed_out={r['timed_out']} duration={r['duration_s']}s\n"
-                      + tail)
-            verdict = "fail" if r["exit_code"] not in (0, None) else "ok"
-        else:
-            raise LoopError(f"未知工具: {tool}")
+        # 1) 查注册表：工具必须存在，且权限未超 MED（HIGH 需审批，M2 接线）
+        spec = get_tool(tool)
+        if spec is None:
+            raise LoopError(f"未知工具: {tool or '(空)'}。可用工具: {list_tool_names()}")
+        if spec.perm >= Perm.HIGH:
+            raise ToolError(f"工具 {tool} 属高危操作（{spec.perm.name}），需要人工审批（M2 接线）")
+        # 2) 执行 handler
+        try:
+            result = spec.handler(self.workspace, args)
+        except ToolError as e:
+            raise LoopError(str(e)) from e
+        output = result.output
+        verdict = "ok" if result.ok else "fail"
 
         db.append_trace(self.run_id, step, tool,
                         json.dumps(args, ensure_ascii=False)[:500],
                         _truncate(output), 0, verdict)
         # 工具结果摘要进入上下文（v0 直拼；正式分层压缩在 context.py）
         self.messages.append({"role": "assistant",
-                              "content": f"调用 {tool or '(none)'} {json.dumps(args, ensure_ascii=False)}"})
+                              "content": f"调用 {tool} {json.dumps(args, ensure_ascii=False)}"})
         self.messages.append({"role": "user",
                               "content": f"[工具结果 {tool}] {_truncate(output, 2000)}"})
         self.done_actions.append({"step": step, "tool": tool,

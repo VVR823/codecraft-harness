@@ -46,7 +46,7 @@ def main():
     result = loop.run()
     print("status:", result["status"], "| steps:", result["steps"])
     last_test = [a for a in result["actions"] if a["tool"] == "run_tests"][-1]
-    green = "exit_code=0" in last_test["result_tail"]
+    green = "全绿" in last_test["result_tail"]
     print("最后一次 run_tests 全绿:", "PASS" if green else "FAIL")
     print("RUN_ID=" + loop.run_id)
     try:
