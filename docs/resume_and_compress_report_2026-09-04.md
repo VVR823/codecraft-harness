@@ -1,0 +1,68 @@
+# M3 硬数字正式报告（2026-09-04 | glm-4.5-flash 免费档）
+
+三大硬数字的 ② ③ 实测存档，与 README / 讲解口径完全一致。
+
+---
+
+## 数字②：杀进程恢复率 = 3/3（100%）
+
+对 T1（单测修复）在 3 个不同决策点把子进程 kill -9（`os._exit(137)`，SIGKILL 语义：
+无 finally、无状态更新，模拟最狠的中断），每次用独立子进程 resume 续跑，统计恢复率。
+
+实测命令：
+```bash
+cd backend
+python scripts/run_resume_test.py --task t1_single_fix --kill-points 2,3,4 --model glm-4.5-flash
+```
+
+| 杀点（第 N 次决策前被杀） | 已落 checkpoint | 被杀确认 | resume 结果 | 不重放 | 全绿 |
+|---|---|---|---|---|---|
+| 2 | 1 步 | ✅ 退出码 137 | done | ✅ 从 checkpoint 续跑 | ✅ 4 步 |
+| 3 | 2 步 | ✅ 退出码 137 | done | ✅ 从 checkpoint 续跑 | ✅ 4 步 |
+| 4 | 3 步 | ✅ 退出码 137 | done | ✅ 从 checkpoint 续跑 | ✅ 7 步 |
+
+**结论：恢复率 3/3 = 100%。** run_id：af9abdc7 / 2971e312 / f46efc6b（data/ 可查 trace 审计）。
+
+### 口径说明（面试要讲清）
+- **度量的是 resume 机制可靠性，不是免费模型不抖动**。resume 进程退出码分类：
+  0=全绿 / 1=正常返回未绿 / 2=机制性失败（工作区漂移、预算未批——重试无意义，立即 FAIL）/ 3=LLM 偶发异常（网络/限流，checkpoint 还在，可自愈重试）。
+  对码 3 做 ≤2 次自愈重试（与 run_all 吸收免费模型抖动同口径）；码 2 是机制真缺陷，直接判 FAIL。
+- 首轮实测 1/2 的失败即码 3（LLM 偶发抖动被旧脚本无分类地判为失败）——修复 probe 异常分类 + 自愈重试后稳定 3/3。
+- 预算 demo（M2）另复证 resume 日志"已完成 3 个动作（不重放）"。
+
+---
+
+## 数字③：上下文压缩率 = 12.3%（压了还绿）
+
+同一任务（T2 补缺失函数，读多文件+长内容，压缩空间最大）真 LLM 跑两次：
+关压缩（全量视图）vs 开压缩（近 3 步全文 + 旧步一行摘要），用真实 API prompt_tokens 对比。
+
+实测命令：
+```bash
+cd backend
+python scripts/measure_compress.py --task t2_missing_fn --model glm-4.5-flash
+```
+
+| 档 | run_id | 全绿 | 步数 | LLM 调用 | 单步 prompt 中位 | 单步 prompt 最大 |
+|---|---|---|---|---|---|---|
+| 关压缩（全量） | cf75bc745f27 | ✅ | 6 | 7 | 1,770 | 1,960 |
+| 开压缩（近 3 步） | 266ad9e44106 | ✅ | 6 | 7 | 1,553 | 1,889 |
+
+**压缩率 = 1 - 1553/1770 = 12.3%**（单步 prompt token 中位比）。
+
+**结论：压缩且绿（数字③ 成立）——开压缩后仍 6 步全绿，步数与 LLM 调用数与关压缩完全一致，压缩不损正确性。**
+
+### 口径说明（面试要讲清）
+- **压缩只影响喂给决策器的视图**；`self.messages` 全量存档（checkpoint/resume/审计不丢任何信息）——所以压缩与可恢复性正交，不会因为压缩丢了上下文导致 resume 后行为漂移。
+- T2 是 6 步短任务，近 3 步（=6 条消息）全文本就占了大半上下文，可压的旧步少 → 12.3% 是**短任务下界**；任务越长（旧步越多）压缩率越高（单元测试 8 步历史本地估算率 >15%）。
+- 压缩率用真实 API prompt_tokens 度量（不是本地字符估算）；本地 `estimate_tokens`（ceil(chars/2)）只用于单测/离线对比。
+
+---
+
+## 相关代码（commit 1e144d2）
+
+- `backend/app/runtime/context.py`：分层压缩（system+目标全文 / 近 N 步全文 / 旧步一行摘要）
+- `backend/scripts/run_resume_test.py` + `drive_resume_probe.py`：杀 N 次测恢复率 + 退出码分类自愈
+- `backend/scripts/measure_compress.py`：开关对比出压缩率
+- `backend/tests/test_context.py`：5 个单测（短历史不变/近步全文/旧步摘要/压缩率>0.15/开关等价）
+- 单测全量 29/29 通过

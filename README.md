@@ -12,6 +12,14 @@
 
 > 同套 harness 用付费 `glm-4-air-250414` 也是 6/6——**证明架构正确，模型只是变量**（早期用更老的免费 `glm-4-flash` 连败，是靠护栏演进 + 换免费新代才拉满）。
 
+**数字② 杀进程恢复率：3/3 = 100%**（T1 在 3 个不同决策点 kill -9，resume 全部续跑至全绿且不重放，详见 [报告](docs/resume_and_compress_report_2026-09-04.md)）
+
+> 度量的是 **resume 机制可靠性**：机制性失败（漂移/预算）立即判 FAIL，LLM 偶发抖动走 ≤2 次自愈重试（与 run_all 同口径）——3/3 里无一次是机制失败。
+
+**数字③ 上下文压缩率：12.3%，压缩且绿**（T2 真机开关对比：单步 prompt 中位 1,770→1,553 token；开压缩后仍 6 步全绿、步数/调用数与关压缩一致——**压缩不损正确性**）
+
+> 压缩只影响 decider 视图，`self.messages` 全量存档（resume/审计不丢信息）。12.3% 是 6 步短任务的下界（近 3 步全文占大半上下文），任务越长压缩率越高。
+
 | 任务 | 难度 | 全绿(免费) | token 中位 | 步数中位 | LLM 调用 | 耗时 |
 |---|---|---|---|---|---|---|
 | T1 单测修复 | 入门 | 2/2 | 5,369 | 4 | 6 | ~192s |
@@ -20,12 +28,12 @@
 
 单次 run 实际 token 5k~18k，免费档成本≈0；付费 air 单次约 1~3 分钱。最大单次 18,147 token（预算护栏校准基数 ≈27k）。
 
-**MVP 底线五条进度（2026-09-04 五条全证）**
+**MVP 底线五条进度（2026-09-04 五条全证，②③ 已有独立真机实测）**
 
 | # | 底线 | 状态 | 证据 |
 |---|---|---|---|
 | 1 | 长任务自修到绿 | ✅ | 真 LLM 全链路 run 数十次，T1~T3 全绿 |
-| 2 | 进程杀死可恢复（resume 不重放） | ✅ | kill -9 模拟（`os._exit(137)`）→ 续跑至绿；预算 demo 中 resume 日志"已完成 3 个动作（不重放）"复证 |
+| 2 | 进程杀死可恢复（resume 不重放） | ✅ | **M3 专项实测 3/3**：T1 杀点 2/3/4 全部续跑至全绿（`run_resume_test.py`，退出码分类 + 自愈重试）；预算 demo resume 日志"已完成 3 个动作（不重放）"复证 |
 | 3 | 工作区漂移可识别（ws_hash） | ✅ | `tests/test_m2.py`：改文件后 resume 拒绝（"工作区漂移"），未改则正常续跑 |
 | 4 | 预算护栏（超限暂停+人工批准） | ✅ | `scripts/demo_budget.py` 真机证据：3940 token 超 3000 预算 → budget_paused → approvals 表 requested+approved → resume 续跑至绿 |
 | 5 | T1~T3 全绿 + 预算内 | ✅ | 上方回归表 |
@@ -58,7 +66,8 @@ backend/
 - **edit_file 精准编辑**：改已有代码只输出 old→new 片段（规避整文件长 JSON 转义），write_file 仅新建；写 .py 即时语法检查
 - **工具权限分级**：只读/沙箱 LOW，写工作区 MED，装包等 HIGH（审批流 W3 接）
 - **结构化失败反馈**：测试红时喂给 LLM 的是 `test_orders.py:12: assert 30.0 == 27.0`，不是几十行原始日志
-- **checkpoint/resume**：每步全量存档上下文，进程被杀从断点续跑、不重放已完成动作
+- **checkpoint/resume**：每步全量存档上下文，进程被杀从断点续跑、不重放已完成动作（实测 3/3）；resume 前比对工作区 hash 识别外部漂移
+- **分层上下文压缩**（M3，可开关）：system+目标全文、近 3 步消息全文、更早历史每步压成一行摘要——只影响决策视图，全量消息仍存档，压缩与可恢复性正交
 - **沙箱隔离**：任务包复制执行、源目录只读；`git restore` 一键重置"考卷"
 
 ## 快速开始
@@ -77,7 +86,11 @@ python scripts/drive_task.py t2_missing_fn --model glm-4.5-flash   # 免费档�
 # 3. 回归表（数字①，含自愈重试）
 python scripts/run_all.py --model glm-4.5-flash --repeat 2
 
-# 4. 单元测试
+# 4. 韧性实测（M3）
+python scripts/run_resume_test.py --task t1_single_fix --kill-points 2,3,4   # 数字② 杀进程恢复率
+python scripts/measure_compress.py --task t2_missing_fn                      # 数字③ 压缩率（开关对比）
+
+# 5. 单元测试
 python -m pytest tests/ -q
 ```
 
@@ -95,5 +108,6 @@ python -m pytest tests/ -q
 | W1 | M0：骨架/沙箱/loop/协议/trace/checkpoint | ✅ Day1~4 |
 | W2 | M1：T1~T3 + pytest 解析 + 端到端闭环 | ✅ Day5~6（数字① 6/6） |
 | W3 | M2：漂移识别 + 预算护栏 + 审批流 | ✅（底线 3/4 证据到手，MVP 五条全证） |
-| W4~5 | M3：压缩开关（数字③）+ 杀 N 次测恢复率（数字②）+ 多模型评估 | 待 |
+| W4~5 | M3：压缩开关（数字③）+ 杀 N 次测恢复率（数字②） | ✅ 2026-09-04（数字② 3/3、数字③ 12.3% 压缩且绿，commit 1e144d2） |
+| W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | 待 |
 | W6~8 | M4：打磨 + run_all 固化 + 简历口径 + 面试预演 | 待 |
