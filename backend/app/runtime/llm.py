@@ -19,7 +19,10 @@ load_dotenv(BASE_DIR / ".env")
 
 def chat(messages: list[dict], model: str = LLM_MODEL,
          temperature: float = 0.2, max_retries: int = 2) -> str:
-    """同步调一次模型，返回文本。失败抛 RuntimeError。"""
+    """同步调一次模型，返回文本。失败抛 RuntimeError。
+
+    注：不用 openai 客户端的 max_retries（旧版不支持），改用本地重试循环。
+    """
     api_key = os.getenv("ZHIPU_API_KEY", "")
     if not api_key:
         raise RuntimeError(
@@ -29,13 +32,21 @@ def chat(messages: list[dict], model: str = LLM_MODEL,
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key, base_url=LLM_BASE_URL)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_retries=max_retries,
-    )
-    text = (resp.choices[0].message.content or "").strip()
-    if not text:
-        raise RuntimeError("LLM 返回空内容")
-    return text
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if not text:
+                raise RuntimeError("LLM 返回空内容")
+            return text
+        except Exception as e:  # noqa: BLE001 - 网络/限流/解析统一重试
+            last_err = e
+            if attempt < max_retries:
+                import time
+                time.sleep(1.0 * (attempt + 1))  # 退避：1s, 2s
+    raise RuntimeError(f"LLM 调用失败（重试 {max_retries} 次后）: {last_err}")
