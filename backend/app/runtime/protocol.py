@@ -21,6 +21,7 @@ class Tool(str, Enum):
     edit_file = "edit_file"
     write_file = "write_file"
     run_tests = "run_tests"
+    install_package = "install_package"   # M2：HIGH 权限占位，请求即审批拒绝+审计
 
 
 class AgentStep(BaseModel):

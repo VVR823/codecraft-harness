@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ..config import LLM_RETRY, MAX_STEPS
 from ..store import db
+from ..tools import approval
 from ..tools.registry import (  # noqa: E402
     Perm,
     ToolError,
@@ -71,7 +72,12 @@ class HarnessLoop:
     """一次 run 的执行主体。decider: (messages: list[dict]) -> AgentStep。"""
 
     def __init__(self, task_dir: str | Path, goal: str, decider,
-                 run_id: str | None = None, task_id: str | None = None):
+                 run_id: str | None = None, task_id: str | None = None,
+                 token_budget: int | None = None, meter: dict | None = None):
+        """token_budget: 单 run token 上限（None=不启用护栏，默认无护栏）。
+        meter: 外部共享的 token 计量 dict（decider 包装层累加 meter["tokens"]，
+        loop 只读判断是否超限）——计量与决策解耦，任何 decider 都能挂护栏。
+        """
         self.workspace = Path(task_dir)
         if not self.workspace.is_dir():
             raise LoopError(f"任务目录不存在: {self.workspace}")
@@ -79,6 +85,8 @@ class HarnessLoop:
         self.decider = decider
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self.task_id = task_id or self.workspace.name
+        self.token_budget = token_budget
+        self.meter = meter
         self.messages: list[dict] = []
         self.done_actions: list[dict] = []
         # 强制验证护栏（Day6）：记录"最后一次写文件"与"最后一次全绿测试"的步号，
@@ -87,6 +95,8 @@ class HarnessLoop:
         self._last_green_test_step = -1
         # 重复动作护栏：记录上一步 (tool, args)，写类工具连续提交完全相同动作时拦截
         self._prev_action: dict | None = None
+        # 预算护栏：人工批准续跑后置 True，本轮不再因超限暂停（"人已放行"语义）
+        self._budget_approved = False
 
     def _rebuild_verification_state(self) -> None:
         """从 trace 重建写/测步号（resume 续跑时用），verdict==ok 即全绿。"""
@@ -111,15 +121,39 @@ class HarnessLoop:
         self.messages = self._initial_messages(self.goal, fresh=True)
         return self._run_loop(start_step=1)
 
-    def resume(self) -> dict:
-        """从最后 checkpoint 续跑（MVP 底线 2：进程被杀后不重放已完成动作）。"""
+    def resume(self, approve_budget: bool = False) -> dict:
+        """从最后 checkpoint 续跑（MVP 底线 2/3/4 交汇点）。
+
+        - 底线2：不重放已完成动作（done_actions 直接载入）
+        - 底线3：checkpoint 的 ws_hash 与当前工作区不一致（漂移）→ 拒绝续跑
+        - 底线4：run 处于 budget_paused（预算超限）→ 必须人工批准才续跑
+        """
         run = db.get_run(self.run_id)
         if run is None:
             raise LoopError(f"run 不存在: {self.run_id}")
+        # 预算暂停门（底线4）：超限暂停的 run 未获批准不得续跑
+        if run["status"] == "budget_paused":
+            if approve_budget:
+                approval.approve_budget_continue(self.run_id)
+            elif not approval.is_budget_approved(self.run_id):
+                raise LoopError(
+                    f"[预算护栏] run {self.run_id[:8]} 因超限暂停，需人工批准续跑："
+                    "调用 resume(approve_budget=True)（审批记录落 approvals 表）")
+            self._budget_approved = True
         db.update_run_status(self.run_id, "running")
         cp = db.last_checkpoint(self.run_id)
         if cp is None:
             return self.run()
+        # 漂移识别（底线3）：工作区被外部改动（git restore/手动编辑）→ 续跑上下文已过期
+        cur_hash = _ws_hash(self.workspace)
+        saved_hash = cp["ws_hash"] or ""
+        if saved_hash and cur_hash != saved_hash:
+            db.update_run_status(self.run_id, "failed")
+            raise LoopError(
+                f"[工作区漂移] 拒绝续跑：checkpoint 存档 ws_hash={saved_hash[:12]}，"
+                f"当前工作区 {cur_hash[:12]}。任务包被外部改动过（如 git restore、手动编辑），"
+                "基于过期上下文续跑会出错。处理：git restore 还原任务包后重跑本任务，"
+                "或确认改动无害后删除该 run 重开。")
         try:
             self.done_actions = json.loads(cp["done_actions"] or "[]")
         except json.JSONDecodeError:
@@ -130,6 +164,9 @@ class HarnessLoop:
             self.messages = []
         if not self.messages:
             self.messages = self._initial_messages(run["goal"] or self.goal, fresh=False)
+        # 预算计量恢复：checkpoint 记录的历史 token 回填 meter（护栏跨 resume 生效）
+        if self.meter is not None:
+            self.meter["tokens"] = int(cp["tokens_used"] or 0)
         start = int(cp["step"]) + 1
         self._rebuild_verification_state()
         print(f"[resume] 从 checkpoint step={cp['step']} 续跑，已完成 "
@@ -145,6 +182,15 @@ class HarnessLoop:
         step = start_step - 1
         try:
             while step < MAX_STEPS:
+                # 预算护栏（底线4）：meter 累计超限 → 暂停等人工批准（记审批请求）
+                if self._over_budget():
+                    approval.request_budget_continue(
+                        self.run_id, self._used_tokens(), self.token_budget)
+                    self._checkpoint(step)
+                    db.update_run_status(self.run_id, "budget_paused")
+                    return self._summary(
+                        "budget_paused", steps=step,
+                        reason=f"累计 token {self._used_tokens()} 超预算 {self.token_budget}")
                 step += 1
                 act = self._decide_once(step)
                 if act.done:
@@ -162,6 +208,12 @@ class HarnessLoop:
                 if dup:
                     # 重复写操作拦截：上一步已成功执行过完全相同的动作，回放结果防空转
                     self.messages.append({"role": "user", "content": dup})
+                    continue
+                # HIGH 工具审批（M2）：模型请求高危工具 → 拒绝 + 审计记录，喂回提示继续
+                spec = get_tool(act.tool.value) if act.tool else None
+                if spec is not None and spec.perm >= Perm.HIGH:
+                    deny = approval.deny_high_tool(self.run_id, act.tool.value)
+                    self.messages.append({"role": "user", "content": deny})
                     continue
                 self._execute(act, step)
                 self._checkpoint(step)
@@ -198,6 +250,20 @@ class HarnessLoop:
                                                  f"{esc_hint}\n合法格式示例: {example}"
                                                  "\n请只输出一段合规 JSON，不要解释。"})
         raise StepParseError("unreachable")  # pragma: no cover
+
+    # ---------- 预算计量（M2） ----------
+    def _used_tokens(self) -> int:
+        return int((self.meter or {}).get("tokens", 0))
+
+    def _over_budget(self) -> bool:
+        """meter 累计 >= 预算即超限（无 meter 或无预算 → 不启用护栏）。
+
+        人工批准续跑后（_budget_approved）本轮不再拦截——预算的语义是"暂停等人批准"，
+        不是"到点就永久失败"。
+        """
+        if not self.token_budget or self.meter is None:
+            return False
+        return self._used_tokens() >= self.token_budget and not self._budget_approved
 
     # ---------- 强制验证 ----------
     def _verify_before_done(self) -> str:
@@ -236,12 +302,13 @@ class HarnessLoop:
     def _execute(self, act: AgentStep, step: int) -> dict:
         tool = act.tool.value if act.tool else ""
         args = act.args or {}
-        # 1) 查注册表：工具必须存在，且权限未超 MED（HIGH 需审批，M2 接线）
+        # 1) 查注册表：工具必须存在，且权限未超 MED（HIGH 由 _run_loop 审批拦截，此处兜底）
         spec = get_tool(tool)
         if spec is None:
             raise LoopError(f"未知工具: {tool or '(空)'}。可用工具: {list_tool_names()}")
         if spec.perm >= Perm.HIGH:
-            raise ToolError(f"工具 {tool} 属高危操作（{spec.perm.name}），需要人工审批（M2 接线）")
+            # 兜底：正常路径在 _run_loop 已被审批拦截，到不了这里
+            raise LoopError(approval.deny_high_tool(self.run_id, tool or "(空)"))
         # 2) 执行 handler
         try:
             result = spec.handler(self.workspace, args)
@@ -278,6 +345,7 @@ class HarnessLoop:
             ctx_messages=self.messages,
             ctx_summary=json.dumps(self.messages, ensure_ascii=False)[-1500:],
             ws_hash=_ws_hash(self.workspace),
+            tokens_used=self._used_tokens(),
         )
 
     def _summary(self, status: str, steps: int = 0, reason: str = "") -> dict:

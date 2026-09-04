@@ -19,7 +19,9 @@ LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 LLM_MODEL = "glm-4.5-flash"
 
 # 成本护栏（Q 系列：Day1 落字段，M2 激活审批流）
-DEFAULT_TOKEN_BUDGET = 60_000  # 单 run 预算；后续按回归实测中位数 x1.5 校准
+# 2026-09-04 校准：实测单次最大 18147 token（glm-4.5-flash T2）×1.5 ≈ 27k → 收紧到 30k。
+# 超限 → loop 转 budget_paused → 人工批准（approvals 表）后才可 resume 续跑（底线 4）。
+DEFAULT_TOKEN_BUDGET = 30_000  # 单 run 预算
 
 # agent loop（Q11）
 MAX_STEPS = 15                 # 单 run 最大步数（防死循环/预算失控）

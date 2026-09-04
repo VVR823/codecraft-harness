@@ -168,6 +168,15 @@ TOOLS: dict[str, ToolSpec] = {
         perm=Perm.LOW,
         handler=_run_tests,
     ),
+    # HIGH 占位（M2 接线）：模型请求 → loop 走 approval.deny_high_tool 拒绝 + 审计记录。
+    # handler 永远不被执行（_run_loop 在 perm>=HIGH 时先拦截），留它只为注册表完整性。
+    "install_package": ToolSpec(
+        name="install_package",
+        description="[高危] 在任务环境安装第三方 Python 包（工作区外副作用，需人工审批；MVP 一律拒绝）",
+        args_hint='{"package": "numpy"}',
+        perm=Perm.HIGH,
+        handler=lambda ws, args: ToolResult("不会执行：HIGH 工具需审批（M2 一律拒绝）"),
+    ),
 }
 
 

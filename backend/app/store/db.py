@@ -5,6 +5,7 @@
 - checkpoints: 断点存档（run_id, step, done_actions, ctx_messages, ctx_summary, ws_hash, tokens_used）
 - traces:      行车记录仪（JSONL 同构事件，摘要）
 - usage:       成本记账
+- approvals:   审批记录（M2：超预算续跑 / HIGH 高危工具——"人工批准"证据落这里）
 """
 import json
 import sqlite3
@@ -48,6 +49,14 @@ CREATE TABLE IF NOT EXISTS usage (
     run_id TEXT PRIMARY KEY,
     total_tokens INTEGER NOT NULL DEFAULT 0,
     cost REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS approvals (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    ts    TEXT NOT NULL,
+    kind  TEXT NOT NULL,        -- budget_continue | high_tool
+    action TEXT NOT NULL,       -- requested | approved | denied
+    note  TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -162,3 +171,29 @@ def bump_usage(run_id: str, tokens: int, cost: float = 0.0) -> None:
 def get_usage(run_id: str) -> sqlite3.Row | None:
     with _lock, _conn() as conn:
         return conn.execute("SELECT * FROM usage WHERE run_id=?", (run_id,)).fetchone()
+
+
+# ---------------- approvals（M2：审批记录，底线 4 证据） ----------------
+def append_approval(run_id: str, kind: str, action: str, note: str = "") -> None:
+    """记一条审批事件：kind=budget_continue|high_tool；action=requested|approved|denied。"""
+    with _lock, _conn() as conn:
+        conn.execute(
+            "INSERT INTO approvals(run_id, ts, kind, action, note) VALUES(?,?,?,?,?)",
+            (run_id, _now(), kind, action, note),
+        )
+
+
+def last_approval(run_id: str, kind: str) -> sqlite3.Row | None:
+    """该 run 某类审批的最后一条记录（判断是否已放行/拒绝）。"""
+    with _lock, _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM approvals WHERE run_id=? AND kind=? ORDER BY id DESC LIMIT 1",
+            (run_id, kind),
+        ).fetchone()
+
+
+def list_approvals(run_id: str) -> list[sqlite3.Row]:
+    with _lock, _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM approvals WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()

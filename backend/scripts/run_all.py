@@ -59,21 +59,29 @@ def run_once(task_name: str, model: str) -> dict:
     try/finally 保证：loop 抛异常（LLM 持续拒请求等）时任务包不留脏——这是换模型/杀进程
     中断后最常见的脏状态来源（上一版 restore 只在正常路径执行，已实测留下 M 状态文件）。
     """
+    from app.config import DEFAULT_TOKEN_BUDGET  # noqa: E402
+
     _restore_task(task_name)  # 从干净 bug 态开始（重试/被杀重启都安全）
     task_dir = TASKS / task_name
     goal = (task_dir / "README.md").read_text(encoding="utf-8")
-    usage_acc = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    usage_acc = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                 "tokens": 0}  # meter 与 loop 共享，"tokens" 供预算护栏读取
     calls = {"n": 0}
 
     def decider(messages):
         text, usage = chat_with_usage(messages, model=model)
         calls["n"] += 1
-        for k in usage_acc:
-            usage_acc[k] += usage.get(k, 0)
+        # API usage 只有 prompt/completion/total_tokens；"tokens" 供预算护栏读取，与 total 同步
+        usage_acc["prompt_tokens"] += usage.get("prompt_tokens", 0)
+        usage_acc["completion_tokens"] += usage.get("completion_tokens", 0)
+        usage_acc["total_tokens"] += usage.get("total_tokens", 0)
+        usage_acc["tokens"] = usage_acc["total_tokens"]
         return text
 
     db.init_db()
-    loop = HarnessLoop(task_dir, goal, decider=decider)
+    # M2：预算护栏激活——token 超 DEFAULT_TOKEN_BUDGET 转 budget_paused（人工批准续跑）
+    loop = HarnessLoop(task_dir, goal, decider=decider,
+                       token_budget=DEFAULT_TOKEN_BUDGET, meter=usage_acc)
     start = time.monotonic()
     try:
         result = loop.run()
