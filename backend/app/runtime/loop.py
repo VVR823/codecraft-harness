@@ -85,6 +85,8 @@ class HarnessLoop:
         # 模型在写码后未跑出全绿就宣称 done 时拒绝收尾（免费模型"写完就飘"的常见病）
         self._last_write_step = -1
         self._last_green_test_step = -1
+        # 重复动作护栏：记录上一步 (tool, args)，写类工具连续提交完全相同动作时拦截
+        self._prev_action: dict | None = None
 
     def _rebuild_verification_state(self) -> None:
         """从 trace 重建写/测步号（resume 续跑时用），verdict==ok 即全绿。"""
@@ -95,6 +97,11 @@ class HarnessLoop:
                 self._last_write_step = t["step"]
             elif t["tool"] == "run_tests" and t["verdict"] == "ok":
                 self._last_green_test_step = t["step"]
+        # 上一步动作（防重复写）：取 trace 最后一条非空工具记录
+        for t in reversed(db.list_traces(self.run_id)):
+            if t["tool"]:
+                self._prev_action = {"tool": t["tool"], "step": t["step"]}
+                break
 
     # ---------- 对外入口 ----------
     def run(self) -> dict:
@@ -151,6 +158,11 @@ class HarnessLoop:
                     db.update_run_status(self.run_id, "done")
                     self._checkpoint(step)
                     return self._summary("done", steps=step)
+                dup = self._dup_action_block(act)
+                if dup:
+                    # 重复写操作拦截：上一步已成功执行过完全相同的动作，回放结果防空转
+                    self.messages.append({"role": "user", "content": dup})
+                    continue
                 self._execute(act, step)
                 self._checkpoint(step)
             db.update_run_status(self.run_id, "paused")
@@ -158,6 +170,9 @@ class HarnessLoop:
         except StepParseError as e:
             db.update_run_status(self.run_id, "failed")
             return self._summary("failed", reason=str(e), steps=step)
+        except Exception as e:  # noqa: BLE001 - decider 网络错误等：标 failed 后上抛
+            db.update_run_status(self.run_id, "failed")
+            raise
 
     # ---------- 决策（带 Q11 重试） ----------
     def _decide_once(self, step: int) -> AgentStep:
@@ -200,6 +215,23 @@ class HarnessLoop:
                     "全绿之后再输出 done。")
         return ""
 
+    def _dup_action_block(self, act: AgentStep) -> str:
+        """重复写动作拦截：写类工具提交与上一步完全相同的 (tool, args) 时拒绝执行。
+
+        免费模型常见病：上一步 edit/write 已成功，模型没吸收结果又原样提交一次
+        （如 edit_file 成功后再次提交同一 old——此时 old 已被替换，必然失败）。
+        返回空串 = 放行；否则返回喂回模型的拦截消息。
+        """
+        if act.done or act.tool is None or act.tool.value not in ("edit_file", "write_file"):
+            return ""
+        prev = self._prev_action
+        if not prev or prev.get("args") is None:
+            return ""  # resume 场景 args 不可比时宁漏勿误
+        if prev["tool"] == act.tool.value and prev["args"] == act.args:
+            return (f"你上一步已成功执行过完全相同的 {act.tool.value}（参数一致），"
+                    "不要重复提交同一操作。请 read_file 确认当前文件实际状态，"
+                    "或 run_tests 验证进度，再决定下一步。")
+
     # ---------- 工具执行 ----------
     def _execute(self, act: AgentStep, step: int) -> dict:
         tool = act.tool.value if act.tool else ""
@@ -233,6 +265,8 @@ class HarnessLoop:
                               "content": f"[工具结果 {tool}] {_truncate(output, 2000)}"})
         self.done_actions.append({"step": step, "tool": tool,
                                   "args": args, "result_tail": _truncate(output, 300)})
+        # 记录上一步成功动作（重复动作护栏用；handler 失败时不上记录→模型可重试同动作）
+        self._prev_action = {"tool": tool, "args": args}
         return {"tool": tool, "output": output}
 
     # ---------- 存档 ----------
