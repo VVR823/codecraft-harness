@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("task_name", help="任务包目录名（tasks/ 下的子目录）")
+    ap.add_argument("--model", default=None, help="覆盖 LLM 模型名（默认 config.LLM_MODEL，A/B 用）")
     args = ap.parse_args()
 
     task_dir = TASKS / args.task_name
@@ -32,8 +33,14 @@ def main():
     goal = (task_dir / "README.md").read_text(encoding="utf-8")
     db.init_db()
 
-    loop = HarnessLoop(task_dir, goal, decider=chat)
-    print(f"run_id: {loop.run_id} | task: {loop.task_id} | decider: GLM-4-Flash-250414")
+    def decider(messages):
+        if args.model:
+            return chat(messages, model=args.model)
+        return chat(messages)
+
+    model_name = args.model or "config 默认"
+    loop = HarnessLoop(task_dir, goal, decider=decider)
+    print(f"run_id: {loop.run_id} | task: {loop.task_id} | model: {model_name}")
     print("=" * 60)
     result = loop.run()
     print("=" * 60)
