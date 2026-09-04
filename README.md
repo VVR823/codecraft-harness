@@ -8,15 +8,17 @@
 
 ## 硬数字（2026-09-04 实测）
 
-**数字① 回归通过率：6/6 全绿**（`glm-4-air-250414` × 3 任务 × 2 次，详见 [报告](docs/run_all_report_2026-09-04.md)）
+**数字① 回归通过率：6/6 全绿**（**免费** `glm-4.5-flash` × 3 任务 × 2 次，run_all 自愈重试≤2，详见 [报告](docs/run_all_report_free_2026-09-04.md)）
 
-| 任务 | 难度 | 全绿 | token 中位 | 步数中位 | LLM 调用 | 耗时 |
+> 同套 harness 用付费 `glm-4-air-250414` 也是 6/6——**证明架构正确，模型只是变量**（早期用更老的免费 `glm-4-flash` 连败，是靠护栏演进 + 换免费新代才拉满）。
+
+| 任务 | 难度 | 全绿(免费) | token 中位 | 步数中位 | LLM 调用 | 耗时 |
 |---|---|---|---|---|---|---|
-| T1 单测修复 | 入门 | 2/2 | 6,638 | 5 | 7 | ~11s |
-| T2 补缺失函数 | 简单 | 2/2 | 14,602 | 6 | 10 | ~15s |
-| T3 跨文件 bug | 中等 | 2/2 | 7,924 | 4 | 6 | ~10s |
+| T1 单测修复 | 入门 | 2/2 | 7,886 | 6 | 7 | ~160s |
+| T2 补缺失函数 | 简单 | 2/2 | 11,437 | 5 | 6 | ~190s |
+| T3 跨文件 bug | 中等 | 2/2 | 11,780 | 6 | 8 | ~160s |
 
-单次 run 实际 token 5k~18k，成本约 1~3 分钱。最大单次 18,147 token（预算护栏校准基数 ≈27k）。
+单次 run 实际 token 5k~18k，免费档成本≈0；付费 air 单次约 1~3 分钱。最大单次 18,147 token（预算护栏校准基数 ≈27k）。
 
 **MVP 底线五条进度**
 
@@ -69,10 +71,11 @@ pip install -r requirements.txt
 cp .env.example .env                                # 填入 ZHIPU_API_KEY
 
 # 2. 单任务真机自修（goal 自动从任务包 README 读）
-python scripts/drive_task.py t2_missing_fn --model glm-4-air-250414
+python scripts/drive_task.py t2_missing_fn --model glm-4.5-flash   # 免费档，6/6
+# 付费更强档（可选）：python scripts/drive_task.py t2_missing_fn --model glm-4-air-250414
 
-# 3. 回归表（数字①）
-python scripts/run_all.py --model glm-4-air-250414 --repeat 2
+# 3. 回归表（数字①，含自愈重试）
+python scripts/run_all.py --model glm-4.5-flash --repeat 2
 
 # 4. 单元测试
 python -m pytest tests/ -q
@@ -80,9 +83,10 @@ python -m pytest tests/ -q
 
 ## 已知边界（踩坑记录，面试可讲）
 
-- **模型差异是真实变量**：同一任务、同一套 harness，免费 `glm-4-flash` 连败 6 次（JSON 裸参数/引号包裹 content），付费 `glm-4-air` 一次全绿。**架构正确性靠 A/B 验证**，不靠单一模型"能跑"。
-- 免费模型在多步上下文尾部输出含代码 JSON 时稳定性崩塌 → 协议演进（edit_file/纠错教学/重试 3 次）缓解，但换更强模型是根本解。
-- 任务包设计影响 AI 行为：包装函数会诱使整文件覆盖误删代码 → 待补函数用单函数文件。
+- **免费模型也能 100%**：早期免费 `glm-4-flash`（最老一代）在多步上下文尾部输出含代码 JSON 时稳定性崩塌（连败 6 次：JSON 裸参数/引号包裹 content/丢字段）。根因不是"模型不会修代码"，而是"把长代码塞进 JSON 字符串"这个动作。把代码移出 JSON（edit_file 只传 old→new 片段）+ 结构化失败反馈 + 强制验证 + 重复动作拦截 + 换免费新代 `glm-4.5-flash` → 拉到 6/6。
+- **模型差异仍是真实变量**：同套 harness，付费 `glm-4-air` 一次全绿、免费 `glm-4.5-flash` 靠护栏 + 重试拉满——**架构正确性靠 A/B 验证**，不靠单一模型"能跑"。
+- **免费最强档 `glm-4.7-flash`（30B）服务端过载不可用**：高峰期频繁 429/1305（访问量过大），agent 循环每步都调用喂不饱，放弃做默认；`glm-4.5-flash` 免费且稳健。
+- 任务包设计影响 AI 行为：包装函数会诱使整文件覆盖误删代码 → 待补函数用单函数文件（已改 T2）。
 
 ## 里程碑进度
 
