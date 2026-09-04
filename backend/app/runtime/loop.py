@@ -81,6 +81,20 @@ class HarnessLoop:
         self.task_id = task_id or self.workspace.name
         self.messages: list[dict] = []
         self.done_actions: list[dict] = []
+        # 强制验证护栏（Day6）：记录"最后一次写文件"与"最后一次全绿测试"的步号，
+        # 模型在写码后未跑出全绿就宣称 done 时拒绝收尾（免费模型"写完就飘"的常见病）
+        self._last_write_step = -1
+        self._last_green_test_step = -1
+
+    def _rebuild_verification_state(self) -> None:
+        """从 trace 重建写/测步号（resume 续跑时用），verdict==ok 即全绿。"""
+        self._last_write_step = -1
+        self._last_green_test_step = -1
+        for t in db.list_traces(self.run_id):
+            if t["tool"] in ("edit_file", "write_file"):
+                self._last_write_step = t["step"]
+            elif t["tool"] == "run_tests" and t["verdict"] == "ok":
+                self._last_green_test_step = t["step"]
 
     # ---------- 对外入口 ----------
     def run(self) -> dict:
@@ -110,6 +124,7 @@ class HarnessLoop:
         if not self.messages:
             self.messages = self._initial_messages(run["goal"] or self.goal, fresh=False)
         start = int(cp["step"]) + 1
+        self._rebuild_verification_state()
         print(f"[resume] 从 checkpoint step={cp['step']} 续跑，已完成 "
               f"{len(self.done_actions)} 个动作（不重放）")
         return self._run_loop(start_step=start)
@@ -126,6 +141,11 @@ class HarnessLoop:
                 step += 1
                 act = self._decide_once(step)
                 if act.done:
+                    block = self._verify_before_done()
+                    if block:
+                        # 拒绝收尾：把原因喂回模型，让它先跑测试验证（不算 done）
+                        self.messages.append({"role": "user", "content": block})
+                        continue
                     db.append_trace(self.run_id, step, "", "", "agent 认为任务已完成",
                                     0, "done")
                     db.update_run_status(self.run_id, "done")
@@ -164,6 +184,22 @@ class HarnessLoop:
                                                  "\n请只输出一段合规 JSON，不要解释。"})
         raise StepParseError("unreachable")  # pragma: no cover
 
+    # ---------- 强制验证 ----------
+    def _verify_before_done(self) -> str:
+        """模型宣称 done 前校验：改过代码就必须有"写之后的全绿测试"。
+
+        返回空串 = 允许收尾；否则返回要喂回模型的拦截消息。
+        防"写完就飘"（免费模型常见病：改完代码不 run_tests 就宣布完成）。
+        """
+        wrote = self._last_write_step >= 0
+        verified_green_after_write = self._last_green_test_step > self._last_write_step
+        if wrote and not verified_green_after_write:
+            return ("你修改了代码，但最近一次全绿的测试发生在修改之前（或还没跑过测试）。"
+                    "代码改了却没有验证通过，不能宣布完成。"
+                    "请先调用 run_tests 确认全部通过（输出里显示所有测试 passed），"
+                    "全绿之后再输出 done。")
+        return ""
+
     # ---------- 工具执行 ----------
     def _execute(self, act: AgentStep, step: int) -> dict:
         tool = act.tool.value if act.tool else ""
@@ -181,6 +217,11 @@ class HarnessLoop:
             raise LoopError(str(e)) from e
         output = result.output
         verdict = "ok" if result.ok else "fail"
+        # 强制验证状态：记录最后一次写文件 / 最后一次全绿测试的步号
+        if tool in ("edit_file", "write_file"):
+            self._last_write_step = step
+        elif tool == "run_tests" and result.ok:
+            self._last_green_test_step = step
 
         db.append_trace(self.run_id, step, tool,
                         json.dumps(args, ensure_ascii=False)[:500],

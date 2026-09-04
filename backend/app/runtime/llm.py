@@ -28,7 +28,8 @@ def _client():
     # 延迟 import：没装 openai 或不走真 LLM（测试用 Fake）时不影响其他模块
     from openai import OpenAI
 
-    return OpenAI(api_key=api_key, base_url=LLM_BASE_URL)
+    # timeout=120：防服务端慢响应把 agent 循环挂死（曾现 4.7-flash 限流期请求无限挂起）
+    return OpenAI(api_key=api_key, base_url=LLM_BASE_URL, timeout=120)
 
 
 def _call_once(client, model: str, messages: list[dict],
@@ -61,7 +62,11 @@ def _chat_with_retry(model: str, messages: list[dict],
         except Exception as e:  # noqa: BLE001 - 网络/限流/解析统一重试
             last_err = e
             if attempt < max_retries:
-                time.sleep(1.0 * (attempt + 1))  # 退避：1s, 2s
+                # 429 限流（免费模型常见）：退避拉长到 5s/10s/15s，等限流窗口过去
+                if "429" in str(e) or "速率限制" in str(e) or "RateLimit" in type(e).__name__:
+                    time.sleep(5.0 * (attempt + 1))
+                else:
+                    time.sleep(1.0 * (attempt + 1))  # 普通退避：1s, 2s
     raise RuntimeError(f"LLM 调用失败（重试 {max_retries} 次后）: {last_err}")
 
 
