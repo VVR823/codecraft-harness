@@ -1,9 +1,11 @@
 """agent 决策协议（Q11）：LLM 每步输出一段 JSON，我们校验后执行。
 
-协议：{"thought": str, "tool": "read_file|run_tests|write_file", "args": {...}, "done": bool}
+协议：{"thought": str, "tool": "read_file|edit_file|write_file|run_tests", "args": {...}, "done": bool}
 - done=True 时本轮结束（tool/args 可空）。
 - 解析策略：允许模型包 ```json 代码块，剥掉后取最外层 {...}；解析/校验失败抛 StepParseError，
   由 loop 触发重试（最多 LLM_RETRY 次，Q11）。
+- Day5+ 演进：新增 edit_file（旧→新片段替换）——改已有代码时模型只需输出改动片段，
+  不用整文件 JSON 转义（免费模型写长 content 的翻车点）。
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 class Tool(str, Enum):
     read_file = "read_file"
+    edit_file = "edit_file"
     write_file = "write_file"
     run_tests = "run_tests"
 

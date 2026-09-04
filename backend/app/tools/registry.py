@@ -73,19 +73,59 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
     return ToolResult(_truncate(content, READ_FILE_CAP))
 
 
-def _write_file(workspace: Path, args: dict) -> ToolResult:
-    path = _path_in_workspace(workspace, str(args.get("path", "")))
-    content = str(args.get("content", ""))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    out = f"已写入 {path.relative_to(workspace)}（{len(content)} 字符）"
-    # 即时语法体检：.py 文件写坏（截断/拼错）立刻暴露，别等 run_tests 收集期才炸
+def _syntax_check(path: Path, content: str) -> str | None:
+    """.py 文件语法体检：有问题返回错误提示，没问题返回 None。"""
     if path.suffix == ".py" and content.strip():
         try:
             compile(content, str(path), "exec")
         except SyntaxError as e:
-            out += (f"\n[语法检查失败] {path.name}:{e.lineno}: {e.msg}"
-                    "\n你写入的 Python 有语法错误，先 read_file 看当前内容，修正后再 write_file。")
+            return (f"[语法检查失败] {path.name}:{e.lineno}: {e.msg}"
+                    "\n你写入的 Python 有语法错误，先 read_file 看当前内容，修正后再写入。")
+    return None
+
+
+def _write_file(workspace: Path, args: dict) -> ToolResult:
+    path = _path_in_workspace(workspace, str(args.get("path", "")))
+    content = str(args.get("content", ""))
+    existed = path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    out = f"已写入 {path.relative_to(workspace)}（{len(content)} 字符）"
+    if existed:
+        out += "\n[提示] 该文件原本已存在。如你只是改其中几行，用 edit_file(给 old→new 片段) 更稳，别整文件重写。"
+    # 即时语法体检：.py 文件写坏（截断/拼错）立刻暴露，别等 run_tests 收集期才炸
+    err = _syntax_check(path, content)
+    if err:
+        out += "\n" + err
+    return ToolResult(out)
+
+
+def _edit_file(workspace: Path, args: dict) -> ToolResult:
+    """精准编辑：把文件里唯一的 old 片段替换成 new 片段。
+
+    - 设计动机：改已有代码时模型只需输出"改动片段"，content 短、几乎没有
+      JSON 转义问题（write_file 整文件长 content 是免费模型的翻车点）。
+    - 安全：old 必须存在且唯一（不唯一=模型没找准，引导先 read_file）。
+    """
+    path = _path_in_workspace(workspace, str(args.get("path", "")))
+    if not path.is_file():
+        raise ToolError(f"文件不存在: {path}")
+    old = str(args.get("old", ""))
+    new = str(args.get("new", ""))
+    if not old.strip():
+        raise ToolError("edit_file 的 old 参数不能为空（要先 read_file 拿准确原文片段）")
+    content = path.read_text(encoding="utf-8")
+    n = content.count(old)
+    if n == 0:
+        raise ToolError(f"文件里找不到要替换的片段: {old[:100]!r}。先用 read_file 看当前内容，复制准确原文。")
+    if n > 1:
+        raise ToolError(f"片段在文件里出现 {n} 次不唯一，请扩大 old 范围（带上下一行）再试")
+    content = content.replace(old, new, 1)
+    path.write_text(content, encoding="utf-8")
+    out = f"已替换 {path.relative_to(workspace)} 中 1 处（old {len(old)} 字符 → new {len(new)} 字符）"
+    err = _syntax_check(path, content)
+    if err:
+        out += "\n" + err
     return ToolResult(out)
 
 
@@ -105,9 +145,18 @@ TOOLS: dict[str, ToolSpec] = {
         perm=Perm.LOW,
         handler=_read_file,
     ),
+    "edit_file": ToolSpec(
+        name="edit_file",
+        description="精准编辑已有文件：把文件中唯一出现的 old 文本片段替换成 new（改已有代码优先用它，"
+                    "只需输出改动片段；old 必须与文件里完全一致且唯一，不唯一就扩大范围）",
+        args_hint='{"path": "utils.py", "old": "被替换的原文片段", "new": "新片段"}',
+        perm=Perm.MED,
+        handler=_edit_file,
+    ),
     "write_file": ToolSpec(
         name="write_file",
-        description="把文件全文写入任务目录（覆盖同名文件；content 须为完整新内容）",
+        description="把文件全文写入任务目录（覆盖同名文件；content 须为完整新内容，含原有 import/函数/"
+                    "docstring。新建文件或整文件重写才用它，改已有代码优先 edit_file）",
         args_hint='{"path": "utils.py", "content": "…完整文件内容…"}',
         perm=Perm.MED,
         handler=_write_file,

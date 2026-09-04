@@ -21,4 +21,4 @@ DEFAULT_TOKEN_BUDGET = 60_000  # 单 run 预算；后续按回归实测中位数
 
 # agent loop（Q11）
 MAX_STEPS = 15                 # 单 run 最大步数（防死循环/预算失控）
-LLM_RETRY = 2                  # JSON 解析失败最多重试次数
+LLM_RETRY = 3                  # JSON 解析失败最多重试次数（免费模型 JSON 偶发崩，2026-09-04 从 2 提 3）
