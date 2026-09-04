@@ -28,6 +28,7 @@ from ..tools.registry import (  # noqa: E402
     get_tool,
     list_tool_names,
 )
+from .context import build_view
 from .protocol import AgentStep, StepParseError, parse_step
 
 _SYSTEM_HEAD = """你是一个软件工程师 Agent，正在执行一个代码任务。
@@ -73,10 +74,14 @@ class HarnessLoop:
 
     def __init__(self, task_dir: str | Path, goal: str, decider,
                  run_id: str | None = None, task_id: str | None = None,
-                 token_budget: int | None = None, meter: dict | None = None):
+                 token_budget: int | None = None, meter: dict | None = None,
+                 context_compress: bool = False,
+                 keep_recent_steps: int = 3):
         """token_budget: 单 run token 上限（None=不启用护栏，默认无护栏）。
         meter: 外部共享的 token 计量 dict（decider 包装层累加 meter["tokens"]，
         loop 只读判断是否超限）——计量与决策解耦，任何 decider 都能挂护栏。
+        context_compress: M3 分层压缩开关（Q14）——开=旧步压成一行摘要只影响
+        decider 视图，self.messages 仍全量存档（checkpoint/resume 不丢信息）。
         """
         self.workspace = Path(task_dir)
         if not self.workspace.is_dir():
@@ -87,6 +92,8 @@ class HarnessLoop:
         self.task_id = task_id or self.workspace.name
         self.token_budget = token_budget
         self.meter = meter
+        self.context_compress = context_compress
+        self.keep_recent_steps = keep_recent_steps
         self.messages: list[dict] = []
         self.done_actions: list[dict] = []
         # 强制验证护栏（Day6）：记录"最后一次写文件"与"最后一次全绿测试"的步号，
@@ -232,7 +239,12 @@ class HarnessLoop:
                    ' "args": {"path": "utils.py"}, "done": false}')
         for attempt in range(LLM_RETRY + 1):
             try:
-                text = self.decider(list(self.messages))
+                # M3：开压缩时给 decider 的是"近 N 步全文 + 旧步摘要"视图（消息本体仍全量）
+                if self.context_compress:
+                    view = build_view(self.messages, self.keep_recent_steps)
+                else:
+                    view = list(self.messages)
+                text = self.decider(view)
                 return parse_step(text)
             except StepParseError as e:
                 if attempt >= LLM_RETRY:
