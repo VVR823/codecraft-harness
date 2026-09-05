@@ -20,7 +20,7 @@
 
 > 压缩只影响 decider 视图，`self.messages` 全量存档（resume/审计不丢信息）。12.3% 是 6 步短任务的下界（近 3 步全文占大半上下文）；**长任务趋势实测**（离线真实消息形态）：24 步任务压缩率 55.5%、视图消息从 50 条恒定压到 9 条——近 3 步全文开销固定被摊薄，任务越长越省（详见 [报告](docs/resume_and_compress_report_2026-09-04.md)）。
 
-**数字④ planner A/B：3/3 全绿（plan 不破坏 self-repair），短任务规划是下界开销 → 默认关**（glm-4.5-flash 真机：T1~T3 plan 档各 1 次全绿；总 token 对比官方 no-plan 中位 T1 +3,722 / T2 −953 / T3 +955——短任务无稳定收益，如实报告；详见 [报告](docs/planner_ab_report_2026-09-05.md)）
+**数字④ planner A/B：健康期 6/6 全绿（plan 不破坏 self-repair），短任务纯开销 + 放大免费限流风险 → 默认关**（glm-4.5-flash 真机背靠背补测：no-plan 3/3、plan 健康期 T1~T3 各 2 次 6/6；总 token T1 +4,665 / T2 +1,952 / T3 +3,636——**初版"T2 −953"为单次运气已证伪**；T2 稳定省 1 步（6→5）。补测失败样本全为 429 限流高压期污染，另揭示 plan 隐藏成本：token 消耗更高更易撞免费账户限流；详见 [报告](docs/planner_ab_report_2026-09-05.md) + [背靠背补测](docs/planner_backtoback_report_2026-09-05.md)）
 
 > planner = **advisory plan + agentic execution 两段式**：执行前先一次规划（~1k token）注入上下文当参考，执行仍让 LLM 每步自选工具（保住 self-repair，不引 LangGraph）。**T2（多文件侦察型）plan 反而省步省 token**——单次证据指向价值在长任务/复杂任务放大（与压缩同构）。故默认关（数字① 回归口径不动），`--plan` 按需开。
 
@@ -117,4 +117,4 @@ python -m pytest tests/ -q
 | W3 | M2：漂移识别 + 预算护栏 + 审批流 | ✅（底线 3/4 证据到手，MVP 五条全证） |
 | W4~5 | M3：压缩开关（数字③）+ 杀 N 次测恢复率（数字②） | ✅ 2026-09-04（数字② 3/3、数字③ 12.3% 压缩且绿，commit 1e144d2） |
 | W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | ✅ 2026-09-04~05（Day5 A/B + 24 步 55.5% 上界，commit 6eba0ea） |
-| W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | 🔄 进行中（B1+B2 代码 commit cf55aa5；B3 A/B 完成，数字④ plan 默认关） |
+| W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | 🔄 进行中（B1+B2 代码 cf55aa5；B3 A/B 完成 + B6a 背靠背补测 9b151cd，数字④ 口径定稿 plan 默认关；B4 API 一致性 86b2925） |
