@@ -24,6 +24,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("task_name", help="任务包目录名（tasks/ 下的子目录）")
     ap.add_argument("--model", default=None, help="覆盖 LLM 模型名（默认 config.LLM_MODEL，A/B 用）")
+    ap.add_argument("--plan", action="store_true",
+                    help="开 M4 planner：执行前先规划一次，计划注入上下文（advisory）")
     args = ap.parse_args()
 
     task_dir = TASKS / args.task_name
@@ -39,7 +41,7 @@ def main():
         return chat(messages)
 
     model_name = args.model or "config 默认"
-    loop = HarnessLoop(task_dir, goal, decider=decider)
+    loop = HarnessLoop(task_dir, goal, decider=decider, use_plan=args.plan)
     print(f"run_id: {loop.run_id} | task: {loop.task_id} | model: {model_name}")
     print("=" * 60)
     result = loop.run()

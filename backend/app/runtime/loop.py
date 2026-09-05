@@ -29,6 +29,7 @@ from ..tools.registry import (  # noqa: E402
     list_tool_names,
 )
 from .context import build_view
+from .plan import PLAN_PROMPT, PLAN_RETRY, AgentPlan, parse_plan, plan_to_text
 from .protocol import AgentStep, StepParseError, parse_step
 
 _SYSTEM_HEAD = """你是一个软件工程师 Agent，正在执行一个代码任务。
@@ -76,12 +77,15 @@ class HarnessLoop:
                  run_id: str | None = None, task_id: str | None = None,
                  token_budget: int | None = None, meter: dict | None = None,
                  context_compress: bool = False,
-                 keep_recent_steps: int = 3):
+                 keep_recent_steps: int = 3,
+                 use_plan: bool = False):
         """token_budget: 单 run token 上限（None=不启用护栏，默认无护栏）。
         meter: 外部共享的 token 计量 dict（decider 包装层累加 meter["tokens"]，
         loop 只读判断是否超限）——计量与决策解耦，任何 decider 都能挂护栏。
         context_compress: M3 分层压缩开关（Q14）——开=旧步压成一行摘要只影响
         decider 视图，self.messages 仍全量存档（checkpoint/resume 不丢信息）。
+        use_plan: M4 planner 开关——开=进入执行前先调一次 planner（同一 decider
+        通道），计划注入初始 user 消息随 checkpoint 持久化；resume 不重规划。
         """
         self.workspace = Path(task_dir)
         if not self.workspace.is_dir():
@@ -94,6 +98,7 @@ class HarnessLoop:
         self.meter = meter
         self.context_compress = context_compress
         self.keep_recent_steps = keep_recent_steps
+        self.use_plan = use_plan
         self.messages: list[dict] = []
         self.done_actions: list[dict] = []
         # 强制验证护栏（Day6）：记录"最后一次写文件"与"最后一次全绿测试"的步号，
@@ -122,10 +127,22 @@ class HarnessLoop:
 
     # ---------- 对外入口 ----------
     def run(self) -> dict:
-        """从头执行一次 run。"""
-        db.create_run(self.run_id, self.task_id, self.goal)
+        """从头执行一次 run。
+
+        M4 planner：use_plan 且本 run 尚无计划 → 先进 plan phase（一次规划调用），
+        计划注入初始 user 消息（goal 之后）→ 随 checkpoint 持久化。产出即 save_plan
+        （原子，进程若被杀在 plan phase，resume 走 run() 时 get_plan 已有行 → 不重规划）。
+        db 行已存在（resume 转发：从未执行过任何步 / 杀在 plan phase）→ 复用不重建。
+        """
+        if db.get_run(self.run_id) is None:
+            db.create_run(self.run_id, self.task_id, self.goal)
         db.update_run_status(self.run_id, "running")
         self.messages = self._initial_messages(self.goal, fresh=True)
+        if self.use_plan and db.get_plan(self.run_id) is None:
+            plan = self._plan_once()
+            if plan is not None:  # None = 重试耗尽降级，无计划照常执行
+                self.messages[1] = dict(self.messages[1])
+                self.messages[1]["content"] += "\n\n" + plan_to_text(plan)
         return self._run_loop(start_step=1)
 
     def resume(self, approve_budget: bool = False) -> dict:
@@ -184,6 +201,38 @@ class HarnessLoop:
         tail = "工作区已就绪，请开始。" if fresh else "工作区已就绪，请继续你上次未完成的修复。"
         return [{"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": "任务目标：" + goal + chr(10) + tail}]
+
+    # ---------- 规划阶段（M4 planner，P1/P3/P4） ----------
+    def _plan_once(self) -> AgentPlan | None:
+        """plan phase：调一次 planner（与执行共用同一 decider 通道，token 计量天然一致）。
+
+        - 消息 = PLAN_PROMPT(system) + 任务目标(user)——与执行消息区分开，互不污染
+        - 坏 plan JSON 重试 ≤PLAN_RETRY（P2）；仍失败 → 记 plans 行 failed 后降级返回
+          None（advisory 语义：规划是前置 0 成本增强，失败不能拖垮执行）
+        - planning tokens = meter 前后差值（decider 包装层负责累加，loop 只读两次）
+        - 产出即 save_plan：进程杀在 plan phase → resume 不重规划、不重付 token
+        """
+        before = self._used_tokens()
+        msgs = [{"role": "system", "content": PLAN_PROMPT},
+                {"role": "user", "content": "任务目标：" + self.goal}]
+        last_err = ""
+        for attempt in range(PLAN_RETRY + 1):
+            try:
+                text = self.decider(msgs)
+                plan = parse_plan(text)
+                db.save_plan(self.run_id, plan.model_dump_json(),
+                             self._used_tokens() - before, status="ok")
+                print(f"[planner] 规划完成：{len(plan.steps)} 步，objective={plan.objective[:50]}")
+                return plan
+            except StepParseError as e:
+                last_err = str(e)
+                if attempt < PLAN_RETRY:
+                    msgs.append({"role": "user",
+                                 "content": f"你上一步输出不是合法计划 JSON（{e}）。"
+                                            "请只输出合规的 plan JSON（含 objective 和 steps），不要解释。"})
+        db.save_plan(self.run_id, "", self._used_tokens() - before, status="failed")
+        print(f"[planner] 规划失败降级为无计划执行（{last_err[:100]}）")
+        return None
 
     def _run_loop(self, start_step: int) -> dict:
         step = start_step - 1

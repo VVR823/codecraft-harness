@@ -39,14 +39,23 @@ _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 _FIRST_OBJECT = re.compile(r"(\{.*\})", re.S)   # 与 _JSON_BLOCK 一致带捕获组
 
 
-def parse_step(text: str) -> AgentStep:
-    """把模型输出解析成 AgentStep；失败抛 StepParseError。"""
+def extract_json_object(text: str) -> str:
+    """从模型输出里剥出最外层 {...} 的 JSON 文本；找不到抛 StepParseError。
+
+    供 parse_step（每步决策）与 parse_plan（M4 planner 计划）共用——两种解析
+    都容忍模型包 ```json 代码块 / 前后夹带自然语言。
+    """
     if not text or not text.strip():
         raise StepParseError("模型输出为空")
     m = _JSON_BLOCK.search(text) or _FIRST_OBJECT.search(text)
     if not m:
         raise StepParseError(f"输出里找不到 JSON 对象: {text[:120]!r}")
-    raw = m.group(1)
+    return m.group(1)
+
+
+def parse_step(text: str) -> AgentStep:
+    """把模型输出解析成 AgentStep；失败抛 StepParseError。"""
+    raw = extract_json_object(text)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:

@@ -53,11 +53,12 @@ def _restore_task(task_name: str) -> None:
             pass
 
 
-def run_once(task_name: str, model: str) -> dict:
+def run_once(task_name: str, model: str, use_plan: bool = False) -> dict:
     """跑一个任务一次，返回结构化结果。任何结束路径（含异常）都 git 还原任务包。
 
     try/finally 保证：loop 抛异常（LLM 持续拒请求等）时任务包不留脏——这是换模型/杀进程
     中断后最常见的脏状态来源（上一版 restore 只在正常路径执行，已实测留下 M 状态文件）。
+    use_plan：M4 planner 开关（数字④ A/B 对比用；回归口径默认 no-plan 保持数字①一致）。
     """
     from app.config import DEFAULT_TOKEN_BUDGET  # noqa: E402
 
@@ -81,7 +82,8 @@ def run_once(task_name: str, model: str) -> dict:
     db.init_db()
     # M2：预算护栏激活——token 超 DEFAULT_TOKEN_BUDGET 转 budget_paused（人工批准续跑）
     loop = HarnessLoop(task_dir, goal, decider=decider,
-                       token_budget=DEFAULT_TOKEN_BUDGET, meter=usage_acc)
+                       token_budget=DEFAULT_TOKEN_BUDGET, meter=usage_acc,
+                       use_plan=use_plan)
     start = time.monotonic()
     try:
         result = loop.run()
@@ -108,7 +110,8 @@ def run_once(task_name: str, model: str) -> dict:
     return ret
 
 
-def run_once_with_retry(task_name: str, model: str, max_retry: int = 2) -> dict:
+def run_once_with_retry(task_name: str, model: str, max_retry: int = 2,
+                        use_plan: bool = False) -> dict:
     """跑一个任务，未全绿则整局重试（git 还原后重跑），最多 max_retry 次。
 
     返回含 retried 字段（实际重试次数）。瞬时故障（400/429/偶发坏动作）靠重试自愈；
@@ -119,7 +122,7 @@ def run_once_with_retry(task_name: str, model: str, max_retry: int = 2) -> dict:
         if attempt > 0:
             print(f"    ↻ 第{attempt}次重试（上一局未全绿）…", flush=True)
         try:
-            last = run_once(task_name, model)
+            last = run_once(task_name, model, use_plan=use_plan)
         except Exception as e:  # 整局崩（如 LLM 持续拒请求）→ 算失败，进重试
             last = {"task": task_name, "run_id": "ERR", "status": "exception",
                     "green": False, "steps": 0, "reason": str(e)[:120],
@@ -165,6 +168,8 @@ def main():
     ap.add_argument("--retries", type=int, default=2,
                     help="单局未全绿时整局重试次数（自愈瞬时故障，默认 2）")
     ap.add_argument("--tasks", default=",".join(ALL_TASKS), help="逗号分隔任务列表")
+    ap.add_argument("--plan", action="store_true",
+                    help="开 M4 planner：先规划再执行（数字④ A/B 用；默认 no-plan 保数字①口径）")
     args = ap.parse_args()
 
     if args.model is None:
@@ -184,13 +189,15 @@ def main():
     if stale:
         print(f"⚠️ 清理 {stale} 条残留 running 记录（上次中断遗留，已标 failed）")
 
-    print(f"run_all 开始：{tasks} × {args.repeat} 次 | model={model} | 自愈重试≤{args.retries}")
+    print(f"run_all 开始：{tasks} × {args.repeat} 次 | model={model} | 自愈重试≤{args.retries}"
+          f"{' | planner=开' if args.plan else ' | planner=关(回归口径)'}")
     print("=" * 70)
     rows = []
     for task in tasks:
         for i in range(args.repeat):
             print(f"> {task} 第{i+1}/{args.repeat} 次…", flush=True)
-            r = run_once_with_retry(task, model, max_retry=args.retries)
+            r = run_once_with_retry(task, model, max_retry=args.retries,
+                                    use_plan=args.plan)
             rows.append(r)
             print(f"  -> {r['status']} | 全绿={r['green']} | "
                   f"steps={r['steps']} | token={r['tokens']} | "
