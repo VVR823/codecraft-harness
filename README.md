@@ -6,7 +6,7 @@
 定位：秋招第二作品，主打**系统设计深度**——证明"能设计 AI 系统本身的工程骨架"。
 配套文档：[执行计划 v2.2](docs/执行计划_v2.2.md)（grill 三轮拷问定稿，15 项决策有出处）。
 
-## 硬数字（2026-09-04 实测）
+## 硬数字（2026-09-04~05 实测）
 
 **数字① 回归通过率：6/6 全绿**（**免费** `glm-4.5-flash` × 3 任务 × 2 次，run_all 自愈重试≤2，详见 [报告](docs/run_all_report_free_2026-09-04.md)）
 
@@ -19,6 +19,10 @@
 **数字③ 上下文压缩率：12.3%，压缩且绿**（T2 真机开关对比：单步 prompt 中位 1,770→1,553 token；开压缩后仍 6 步全绿、步数/调用数与关压缩一致——**压缩不损正确性**）
 
 > 压缩只影响 decider 视图，`self.messages` 全量存档（resume/审计不丢信息）。12.3% 是 6 步短任务的下界（近 3 步全文占大半上下文）；**长任务趋势实测**（离线真实消息形态）：24 步任务压缩率 55.5%、视图消息从 50 条恒定压到 9 条——近 3 步全文开销固定被摊薄，任务越长越省（详见 [报告](docs/resume_and_compress_report_2026-09-04.md)）。
+
+**数字④ planner A/B：3/3 全绿（plan 不破坏 self-repair），短任务规划是下界开销 → 默认关**（glm-4.5-flash 真机：T1~T3 plan 档各 1 次全绿；总 token 对比官方 no-plan 中位 T1 +3,722 / T2 −953 / T3 +955——短任务无稳定收益，如实报告；详见 [报告](docs/planner_ab_report_2026-09-05.md)）
+
+> planner = **advisory plan + agentic execution 两段式**：执行前先一次规划（~1k token）注入上下文当参考，执行仍让 LLM 每步自选工具（保住 self-repair，不引 LangGraph）。**T2（多文件侦察型）plan 反而省步省 token**——单次证据指向价值在长任务/复杂任务放大（与压缩同构）。故默认关（数字① 回归口径不动），`--plan` 按需开。
 
 | 任务 | 难度 | 全绿(免费) | token 中位 | 步数中位 | LLM 调用 | 耗时 |
 |---|---|---|---|---|---|---|
@@ -53,11 +57,11 @@ backend/
 │   │   ├── registry.py        # 工具注册表：权限分级 LOW/MED/HIGH + 工具说明书同源
 │   │   └── sandbox_exec.py    # 轻量沙箱：复制执行 + utf-8 强制 + 超时进程树强杀
 │   ├── verifier/pytest_runner.py  # pytest 结构化解析（红 N 条 / 文件:行 / 断言消息）
-│   ├── store/db.py            # SQLite：runs/checkpoints/traces/usage（WAL）
+│   ├── store/db.py            # SQLite：runs/checkpoints/traces/usage/approvals/plans（WAL）
 │   └── trace/                 # 事件 trace 记录
 ├── tasks/                     # T1~T3 手写任务包（module + 测试 + README，git 作还原点）
-├── scripts/                   # drive_t1/drive_task/run_all/replay_run/demo_*
-├── tests/                     # 19 个单元测试（含真沙箱跑任务包）
+├── scripts/                   # drive_task/run_all/run_resume_test/measure_*（实测工具）
+├── tests/                     # 36 个单元测试（含真沙箱跑任务包）
 └── pytest.ini                 # 回归只收 tests/，排除任务包"考卷"
 ```
 
@@ -68,6 +72,7 @@ backend/
 - **结构化失败反馈**：测试红时喂给 LLM 的是 `test_orders.py:12: assert 30.0 == 27.0`，不是几十行原始日志
 - **checkpoint/resume**：每步全量存档上下文，进程被杀从断点续跑、不重放已完成动作（实测 3/3）；resume 前比对工作区 hash 识别外部漂移
 - **分层上下文压缩**（M3，可开关）：system+目标全文、近 3 步消息全文、更早历史每步压成一行摘要——只影响决策视图，全量消息仍存档，压缩与可恢复性正交
+- **任务规划器**（M4，`--plan` 按需开）：执行前先一次规划（Pydantic 强校验 + 重试），计划注入上下文当 advisory 参考、随 checkpoint 持久化（resume 不重规划）——非硬调度，执行仍 agentic，保住 self-repair
 - **沙箱隔离**：任务包复制执行、源目录只读；`git restore` 一键重置"考卷"
 
 ## 快速开始
@@ -86,9 +91,11 @@ python scripts/drive_task.py t2_missing_fn --model glm-4.5-flash   # 免费档�
 # 3. 回归表（数字①，含自愈重试）
 python scripts/run_all.py --model glm-4.5-flash --repeat 2
 
-# 4. 韧性实测（M3）
+# 4. 韧性实测（M3/M4）
 python scripts/run_resume_test.py --task t1_single_fix --kill-points 2,3,4   # 数字② 杀进程恢复率
 python scripts/measure_compress.py --task t2_missing_fn                      # 数字③ 压缩率（开关对比）
+python scripts/measure_plan.py --task t2_missing_fn                          # 数字④ planner A/B（plan vs no-plan）
+# 开 planner 跑任务/回归（默认关）：drive_task.py t2_missing_fn --plan / run_all.py --plan
 
 # 5. 单元测试
 python -m pytest tests/ -q
@@ -109,5 +116,5 @@ python -m pytest tests/ -q
 | W2 | M1：T1~T3 + pytest 解析 + 端到端闭环 | ✅ Day5~6（数字① 6/6） |
 | W3 | M2：漂移识别 + 预算护栏 + 审批流 | ✅（底线 3/4 证据到手，MVP 五条全证） |
 | W4~5 | M3：压缩开关（数字③）+ 杀 N 次测恢复率（数字②） | ✅ 2026-09-04（数字② 3/3、数字③ 12.3% 压缩且绿，commit 1e144d2） |
-| W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | 待 |
-| W6~8 | M4：打磨 + run_all 固化 + 简历口径 + 面试预演 | 待 |
+| W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | ✅ 2026-09-04~05（Day5 A/B + 24 步 55.5% 上界，commit 6eba0ea） |
+| W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | 🔄 进行中（B1+B2 代码 commit cf55aa5；B3 A/B 完成，数字④ plan 默认关） |
