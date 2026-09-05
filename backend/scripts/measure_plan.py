@@ -42,8 +42,8 @@ def _restore(task: str):
             pass
 
 
-def run_one(task: str, model: str, use_plan: bool) -> dict:
-    """真 LLM 跑一次，返回 {green, steps, calls, tokens, planning_tokens, duration}。"""
+def _run_once(task: str, model: str, use_plan: bool) -> dict:
+    """单次真 LLM 跑（内部被 run_one 重试调用）。"""
     _restore(task)  # 起跑前必还原：两档起点一致（同 bug 态）
     task_dir = TASKS / task
     goal = (task_dir / "README.md").read_text(encoding="utf-8")
@@ -77,7 +77,36 @@ def run_one(task: str, model: str, use_plan: bool) -> dict:
             "calls": calls["n"], "tokens": usage_acc["total_tokens"],
             "planning_tokens": int(plan_row["planning_tokens"]) if plan_row else 0,
             "plan_status": (plan_row["status"] if plan_row else "-"),
+            "status": result["status"],  # done|failed|budget_paused——护栏止损与正常失败可区分
             "duration_s": dt, "run_id": loop.run_id}
+
+
+def run_one(task: str, model: str, use_plan: bool, max_retry: int = 2) -> dict:
+    """真 LLM 跑一次（带自愈重试，与 run_all 同口径）。
+
+    异常抛出的 RuntimeError = 基础设施故障（429 账户级限流 code 1302、空内容、
+    网络错误——免费模型服务端高压下都常见），整局冷却后重跑；
+    正常返回的 failed/budget_paused = 模型真实决策路径的结果，不重试（如实上报，
+    否则会掩盖 plan 带偏/空转的真实信号）。
+    """
+    for attempt in range(max_retry + 1):
+        if attempt:
+            print(f"    ↻ 第{attempt}次整局重试（冷却 90s）…", flush=True)
+            time.sleep(90)
+        try:
+            return _run_once(task, model, use_plan)
+        except RuntimeError as e:
+            msg = str(e)
+            if "429" in msg or "速率限制" in msg or "1302" in msg:
+                print(f"    ⚠️ LLM 限流（{msg[:70]}…）", flush=True)
+                continue
+            if "空内容" in msg or "LLM 返回空" in msg:
+                print(f"    ⚠️ LLM 返回空内容（服务端高压偶发，{msg[:50]}…）", flush=True)
+                continue
+            raise
+    return {"task": task, "plan": use_plan, "green": False, "steps": 0, "calls": 0,
+            "tokens": 0, "planning_tokens": 0, "plan_status": "-", "status": "llm_failed",
+            "duration_s": 0, "run_id": "", "error": "LLM 故障重试耗尽"}
 
 
 def main():
@@ -111,22 +140,23 @@ def main():
             rows.append(run_one(task, args.model, use_plan=False))
             r = rows[-1]
             print(f"  [对照 no-plan] run={r['run_id'][:8]} | green={r['green']} | steps={r['steps']} "
-                  f"| calls={r['calls']} | tokens={r['tokens']}", flush=True)
+                  f"| calls={r['calls']} | tokens={r['tokens']} | status={r.get('status','')}", flush=True)
         if want_plan:
             rows.append(run_one(task, args.model, use_plan=True))
             r = rows[-1]
             print(f"  [规划 plan]    run={r['run_id'][:8]} | green={r['green']} | steps={r['steps']} "
-                  f"| calls={r['calls']} | tokens={r['tokens']} (+规划{r['planning_tokens']})", flush=True)
+                  f"| calls={r['calls']} | tokens={r['tokens']} (+规划{r['planning_tokens']})"
+                  f" | status={r.get('status','')}", flush=True)
 
     print("\n" + "=" * 78)
     lines = [f"# planner A/B 实测（{time.strftime('%Y-%m-%d %H:%M')} | model={args.model}）", "",
-             "| 任务 | 档 | 全绿 | 步数 | LLM调用 | 总token | 规划token | 耗时(s) | run_id |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| 任务 | 档 | 全绿 | 步数 | LLM调用 | 总token | 规划token | 状态 | 耗时(s) | run_id |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         lines.append(
             f"| {r['task']} | {'plan' if r['plan'] else 'no-plan'} | "
             f"{'✅' if r['green'] else '❌'} | {r['steps']} | {r['calls']} | {r['tokens']} "
-            f"| {r['planning_tokens']} | {r['duration_s']} | {r['run_id'][:8]} |")
+            f"| {r['planning_tokens']} | {r.get('status', r.get('error', ''))} | {r['duration_s']} | {r['run_id'][:8]} |")
     lines.append("")
     # 按任务做 plan vs no-plan 小结
     lines.append("## 小结")
