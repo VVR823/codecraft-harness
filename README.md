@@ -64,7 +64,7 @@ backend/
 │   └── trace/                 # 事件 trace 记录
 ├── tasks/                     # T1~T3 手写任务包（module + 测试 + README，git 作还原点）
 ├── scripts/                   # drive_task/run_all/run_resume_test/measure_*（实测工具）
-├── tests/                     # 81 个单元测试（含真沙箱跑任务包）
+├── tests/                     # 85 个单元测试（含真沙箱跑任务包；conftest 隔离临时库，不碰 data/harness.db）
 └── pytest.ini                 # 回归只收 tests/，排除任务包"考卷"
 ```
 
@@ -118,6 +118,9 @@ python -m pytest tests/ -q
 - **模型差异仍是真实变量**：同套 harness，付费 `glm-4-air` 一次全绿、免费 `glm-4.5-flash` 靠护栏 + 重试拉满——**架构正确性靠 A/B 验证**，不靠单一模型"能跑"。
 - **免费最强档 `glm-4.7-flash`（30B）服务端过载不可用**：高峰期频繁 429/1305（访问量过大），agent 循环每步都调用喂不饱，放弃做默认；`glm-4.5-flash` 免费且稳健。
 - 任务包设计影响 AI 行为：包装函数会诱使整文件覆盖误删代码 → 待补函数用单函数文件（已改 T2）。
+- **M5 Skills 示例内容与 system 规则重叠（诚实口径）**：内置示例 `pytest-green` 的指引（edit_file 优先/写完必跑测试/不改测试）在 system prompt 已有——所以"加了 skill 行为应没差"。这不是机制缺陷：**机制（SKILL.md 注册/发现/按 goal 匹配/注入）才是要讲的点，内容只是教学示例**。像 Anthropic Skills 那样真正改变行为的是"领域专有方法"（某类 bug 的排查套路），属后续可扩展方向。
+- **M5 MCP demo 工具无任务相关性（诚实口径）**：`sqlite_query` 查的是 harness 自己的运行库——对一个修代码的 agent 没有任务价值，**只演示 capability**（协议自研/动态注册/权限对齐）。不包装成"agent 通过 MCP 获取任务关键数据"。
+- **M5 记忆无 A/B 硬数字（诚实口径）**：planner 有 measure_plan A/B，记忆没有"有/无记忆第二次跑的 token/步差"对比——M5 定位是关键词补强不是新硬数字。价值主张是**经验防重踩**（机制可指 distill/render 代码 + 同 kind 去重/上限），**不报省多少**；若要硬数字需另立评测。
 
 ## 里程碑进度
 
@@ -129,4 +132,4 @@ python -m pytest tests/ -q
 | W4~5 | M3：压缩开关（数字③）+ 杀 N 次测恢复率（数字②） | ✅ 2026-09-04（数字② 3/3、数字③ 12.3% 压缩且绿，commit 1e144d2） |
 | W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | ✅ 2026-09-04~05（Day5 A/B + 24 步 55.5% 上界，commit 6eba0ea） |
 | W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | ✅ 2026-09-06 收官（B1~B4 + B6a 背靠背 9b151cd/d323d65 + B6b 归档 87cc0f1 + B6c 文档收官；O1-O6 精益优化 78ddfcd，单测 52/52；B5 最简 UI 未做——Q10 余力项，保持待拍板） |
-| W9 | M5：JD 关键词补强——Skills 注册 + MCP（自研 client+demo server）+ 长期记忆（详见 [执行计划_M5.md](docs/执行计划_M5.md)） | ✅ 2026-09-06（Skills/MCP/记忆 29 新测，单测 52→81；真机三开关全开 T1 全绿；三模块默认关不碰 6/6 基线） |
+| W9 | M5：JD 关键词补强——Skills 注册 + MCP（自研 client+demo server）+ 长期记忆（详见 [执行计划_M5.md](docs/执行计划_M5.md)） | ✅ 2026-09-06（Skills/MCP/记忆 29 新测，单测 52→85；真机三开关全开 T1 全绿 run `b5c4a1e61208`，见 [留档报告](docs/m5_smoke_report_2026-09-06.md)；测试 DB 隔离 + 两处 docstring 对齐 85/85；三模块默认关不碰 6/6 基线） |

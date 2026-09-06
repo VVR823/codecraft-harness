@@ -15,13 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.runtime.loop import HarnessLoop  # noqa: E402
 from app.store import db  # noqa: E402
 
-pytestmark = pytest.mark.usefixtures("db_ready")
-
-
-@pytest.fixture(autouse=True)
-def db_ready():
-    db.init_db()
-
 
 def _mk_loop(tmp_path, stall_warning: bool = False) -> HarnessLoop:
     loop = HarnessLoop(tmp_path, "测试目标", decider=lambda m: None,

@@ -65,7 +65,7 @@ def _write_frame(msg: dict) -> None:
     sys.stdout.flush()
 
 
-def _handle_call(params: dict) -> dict:
+def _handle_call(params: dict, db_dir: Path) -> dict:
     name = params.get("name", "")
     if name != "sqlite_query":
         return {"content": [{"type": "text", "text": f"未知工具: {name}"}],
@@ -81,7 +81,7 @@ def _handle_call(params: dict) -> dict:
     if not sql.upper().lstrip().startswith("SELECT"):
         return {"content": [{"type": "text", "text": "只允许 SELECT 查询（server 侧拒绝写操作）"}],
                 "isError": True}
-    db_path = _DB_DIR / db_name
+    db_path = Path(db_dir) / db_name
     if not db_path.is_file():
         return {"content": [{"type": "text", "text": f"库文件不存在: {db_path}"}],
                 "isError": True}
@@ -102,7 +102,14 @@ def _handle_call(params: dict) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": False}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """--db-dir DIR：覆盖白名单库目录（测试传 tmp 隔离库；缺省 data/ 真库）。"""
+    argv = sys.argv[1:] if argv is None else argv
+    db_dir = _DB_DIR
+    if "--db-dir" in argv:
+        i = argv.index("--db-dir")
+        if i + 1 < len(argv):
+            db_dir = Path(argv[i + 1])
     while True:
         msg = _read_frame()
         if msg is None:
@@ -120,7 +127,7 @@ def main() -> int:
                           "result": {"tools": _TOOLS}})
         elif method == "tools/call":
             _write_frame({"jsonrpc": "2.0", "id": req_id,
-                          "result": _handle_call(msg.get("params", {}))})
+                          "result": _handle_call(msg.get("params", {}), db_dir)})
         # notifications/* 不响应
 
 

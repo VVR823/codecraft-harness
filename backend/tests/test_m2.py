@@ -17,14 +17,6 @@ from app.runtime.loop import HarnessLoop, LoopError  # noqa: E402
 from app.store import db  # noqa: E402
 from app.tools import approval  # noqa: E402
 
-pytestmark = pytest.mark.usefixtures("db_ready")
-
-
-@pytest.fixture(autouse=True)
-def db_ready():
-    db.init_db()
-
-
 @pytest.fixture
 def ws(tmp_path):
     """带一个可读 .py 的任务工作区（跑 Fake 决策脚本用）。"""

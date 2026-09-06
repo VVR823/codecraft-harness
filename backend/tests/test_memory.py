@@ -11,29 +11,11 @@ from app.runtime import memory  # noqa: E402
 from app.runtime.loop import HarnessLoop  # noqa: E402
 from app.store import db  # noqa: E402
 
-pytestmark = pytest.mark.usefixtures("db_ready")
-
-
-@pytest.fixture()
-def db_ready():
-    db.init_db()
-
 
 @pytest.fixture()
 def task_id() -> str:
-    """唯一任务名：真库测试不污染 t1~t3 的真实记忆。"""
+    """唯一任务名（conftest 已隔离临时库，命名仅为可读性）。"""
     return f"mem_test_{uuid.uuid4().hex[:8]}"
-
-
-def _cleanup(task_id: str):
-    """清理该测试任务写进真库的记忆行。"""
-    import sqlite3
-    conn = sqlite3.connect(db.DB_PATH)
-    try:
-        conn.execute("DELETE FROM memories WHERE task_id=?", (task_id,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 # ---------- 沉淀 ----------
@@ -51,7 +33,6 @@ def test_distill_success_path(task_id):
     assert "strip(' ')" in got and "strip()" in got and "utils.py" in got
     mems = db.get_memories_for_task(task_id)
     assert len(mems) == 1 and mems[0]["kind"] == "success_path"
-    _cleanup(task_id)
 
 
 def test_distill_failure_lesson(task_id):
@@ -59,8 +40,6 @@ def test_distill_failure_lesson(task_id):
     assert got and "失败教训" in got and "429" in got
     mems = db.get_memories_for_task(task_id)
     assert mems[0]["kind"] == "failure_lesson"
-    _cleanup(task_id)
-
 
 def test_distill_skips_paused_and_empty():
     # paused（可续跑）不沉淀；failed 但无 reason 不沉淀
@@ -82,8 +61,6 @@ def test_distill_dedupes_same_kind_keeps_latest(task_id):
     mems = db.get_memories_for_task(task_id, limit=10)
     sp = [m for m in mems if m["kind"] == "success_path"]
     assert len(sp) == 1 and sp[0]["run_id"] == "run_2"
-    _cleanup(task_id)
-
 
 def test_save_memory_caps_per_task(task_id):
     """每任务总量封顶 MAX_MEMORIES_PER_TASK：超出删最旧（多 kind 场景兜底）。"""
@@ -96,15 +73,11 @@ def test_save_memory_caps_per_task(task_id):
     run_ids = [m["run_id"] for m in mems]
     assert "r0" not in run_ids and "r2" not in run_ids   # 最旧 3 条被裁
     assert f"r{n + 2}" in run_ids                        # 最新保留
-    _cleanup(task_id)
-
 
 # ---------- 检索渲染 ----------
 
 def test_render_for_goal_empty_when_no_memory(task_id):
     assert memory.render_for_goal(task_id) == ""
-    _cleanup(task_id)
-
 
 def test_render_for_goal_returns_recent(task_id):
     memory.distill("run_1", task_id, [], "failed", reason="测试一直红：x 没初始化")
@@ -114,8 +87,6 @@ def test_render_for_goal_returns_recent(task_id):
     text = memory.render_for_goal(task_id)
     assert "经验" in text and "教训" in text
     assert "历史 run 的记忆" in text
-    _cleanup(task_id)
-
 
 # ---------- loop 注入与沉淀 ----------
 
@@ -144,8 +115,6 @@ def test_loop_initial_message_injects_memory_when_enabled(tmp_path, task_id):
     off = _mk_loop(ws, task_id, use_memory=False)
     msgs_off = off._initial_messages(off.goal, fresh=True)
     assert "历史 run 的记忆" not in msgs_off[1]["content"]
-    _cleanup(task_id)
-
 
 def test_loop_maybe_distill_writes_on_done(tmp_path, task_id):
     """_maybe_distill：done 且 done_actions 有 edit_file → 沉淀 success_path。"""
@@ -163,8 +132,6 @@ def test_loop_maybe_distill_writes_on_done(tmp_path, task_id):
     # 内容里应含文件与改动（验证不再只出空 '?: →'）
     content = [m["content"] for m in mems if m["kind"] == "success_path"][0]
     assert "utils.py" in content and "strip()" in content
-    _cleanup(task_id)
-
 
 def test_loop_maybe_distill_paused_skips(tmp_path, task_id):
     """paused（可续跑）不沉淀。"""
@@ -172,4 +139,3 @@ def test_loop_maybe_distill_paused_skips(tmp_path, task_id):
     loop = _mk_loop(ws, task_id, use_memory=True)
     loop._maybe_distill({"status": "paused", "reason": "步数上限"})
     assert db.get_memories_for_task(task_id) == []
-    _cleanup(task_id)

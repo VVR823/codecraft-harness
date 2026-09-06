@@ -20,9 +20,13 @@ def _clean_registry():
 
 
 @pytest.fixture()
-def client():
-    """spawn 真 demo server 的 client（每条用例独立进程，测完必停）。"""
-    c = spawn_client("test")
+def client(mcp_client_factory, _isolated_db):
+    """spawn 连 tmp 隔离库的 demo server（每条用例独立进程，测完必停）。
+
+    隔离库经 conftest init_db 建表（runs/checkpoints…同 schema），只读查询
+    断言落在 tmp 库上——不碰 data/harness.db，clone 机器无真库也能跑。
+    """
+    c = mcp_client_factory("test", db_dir=_isolated_db)
     c.start()
     yield c
     c.stop()
@@ -40,7 +44,8 @@ def test_handshake_and_list_tools(client: MCPClient):
 
 
 def test_call_tool_readonly_query(client: MCPClient):
-    # 对 demo server 白名单库（harness.db）跑只读查询（init_db 过必有 runs 表）
+    # 对 demo server 白名单库跑只读查询（client fixture 已 --db-dir 指 tmp
+    # 隔离库，conftest init_db 建过表 → 必有 runs/checkpoints）
     out = client.call_tool("sqlite_query",
                            {"database": "harness.db",
                             "sql": "SELECT name FROM sqlite_master WHERE type='table'"})

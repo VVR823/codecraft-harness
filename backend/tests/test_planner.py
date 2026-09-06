@@ -17,8 +17,6 @@ from app.runtime.loop import HarnessLoop  # noqa: E402
 from app.runtime.plan import PLAN_PROMPT, PLAN_RETRY  # noqa: E402
 from app.store import db  # noqa: E402
 
-pytestmark = pytest.mark.usefixtures("db_ready")
-
 GOOD_PLAN = json.dumps(
     {"objective": "修好 utils.py 的 trim 函数",
      "steps": [{"id": "1", "intent": "读文件看现状", "files": ["utils.py"],
@@ -26,11 +24,6 @@ GOOD_PLAN = json.dumps(
                {"id": "2", "intent": "修复并跑测试", "files": ["utils.py"],
                 "verification": "pytest 全绿"}]},
     ensure_ascii=False)
-
-
-@pytest.fixture(autouse=True)
-def db_ready():
-    db.init_db()
 
 
 @pytest.fixture
