@@ -108,6 +108,54 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
     return ToolResult(_truncate(content, READ_FILE_CAP) + cap_note)
 
 
+def _search_file(workspace: Path, args: dict) -> ToolResult:
+    """按子串/正则搜索文件内容，返回 文件:行号:内容 匹配清单（带行号，可配合 read_file 分页精读）。
+
+    真实库/大文件定位的必备工具：先 search 找到相关定义/引用在哪几行，
+    再 read_file offset/limit 精读目标区间——避免从头通读大文件。
+    """
+    pattern = str(args.get("pattern", "")).strip()
+    if not pattern:
+        return ToolResult("pattern 不能为空。示例: {\"pattern\": \"def _table_formats\", \"path\": \"tabulate/__init__.py\"}")
+    rel = str(args.get("path", ""))
+    if rel:
+        p = _path_in_workspace(workspace, rel)
+        targets = [p] if p.is_file() else []
+        if not targets:
+            return ToolResult(f"文件不存在: {rel}")
+    else:
+        # 无 path = 搜整个任务目录（排除 .git/__pycache__）
+        targets = [p for p in workspace.rglob("*")
+                   if p.is_file() and p.suffix in (".py", ".md", ".txt", ".json", ".toml", ".ini")
+                   and ".git" not in p.parts and "__pycache__" not in p.parts]
+        if len(targets) > 50:
+            return ToolResult(f"任务目录文件过多（{len(targets)} 个），请指定 path 限定到单个文件再搜")
+    import re as _re
+    try:
+        rx = _re.compile(pattern)
+    except _re.error as e:
+        return ToolResult(f"正则非法: {e}。若想搜普通文本（含特殊字符），请转义或用简单子串。")
+    hits: list[str] = []
+    cap = 20  # 最多返回 20 条，防上下文爆炸
+    ws_abs = workspace.resolve()
+    for p in targets:
+        try:
+            for lineno, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if rx.search(line):
+                    rel_p = p.resolve().relative_to(ws_abs)
+                    hits.append(f"{rel_p}:{lineno}: {line.strip()[:150]}")
+                    if len(hits) >= cap:
+                        break
+        except (OSError, UnicodeDecodeError):
+            continue
+        if len(hits) >= cap:
+            break
+    if not hits:
+        return ToolResult(f"未找到匹配 {pattern!r} 的行（{len(targets)} 个文件）")
+    return ToolResult(f"找到 {len(hits)} 处匹配（最多显示 {cap} 条，行号可配 read_file offset 精读）:\n"
+                      + "\n".join(hits))
+
+
 def _syntax_check(path: Path, content: str) -> str | None:
     """.py 文件语法体检：有问题返回错误提示，没问题返回 None。"""
     if path.suffix == ".py" and content.strip():
@@ -181,6 +229,15 @@ TOOLS: dict[str, ToolSpec] = {
         args_hint='{"path": "utils.py"} 或大文件分页 {"path": "big.py", "offset": 200, "limit": 100}',
         perm=Perm.LOW,
         handler=_read_file,
+    ),
+    "search_file": ToolSpec(
+        name="search_file",
+        description="按正则/子串搜索文件内容，返回 文件:行号:内容 匹配清单。真实库/大文件定位必备："
+                    "先 search 找定义/引用在哪几行，再 read_file 分页精读，别从头通读大文件。"
+                    "path 省略则搜整个任务目录（限 50 文件内）",
+        args_hint='{"pattern": "GITHUB_ESCAPE_RULES"} 或 {"pattern": "def tabulate", "path": "tabulate/__init__.py"}',
+        perm=Perm.LOW,
+        handler=_search_file,
     ),
     "edit_file": ToolSpec(
         name="edit_file",

@@ -223,3 +223,27 @@ def test_read_file_pagination_bounds(tmp_path):
     # 小文件全文直读不受影响（无截断提示）
     r = registry._read_file(ws, {"path": "big.py"})
     assert r.ok and "[行" not in r.output
+
+
+# ---------- search_file（T4 第四次失败补：真实库定位必须有搜索） ----------
+
+def test_search_file_locates_definitions(tmp_path):
+    """search_file 返回 文件:行号:内容，可定位大文件里的定义。"""
+    from app.tools import registry
+    (tmp_path / "big.py").write_text(
+        "import os\n\nGITHUB_ESCAPE_RULES = {r\"|\": r\"\\|\"}\n\n"
+        "def _pipe_line():\n    pass\n")
+    r = registry._search_file(tmp_path, {"pattern": "GITHUB_ESCAPE_RULES", "path": "big.py"})
+    assert r.ok and "big.py:3" in r.output and "GITHUB_ESCAPE_RULES" in r.output
+    # 正则多匹配
+    r = registry._search_file(tmp_path, {"pattern": "def |GITHUB"})
+    assert r.ok and "big.py:3" in r.output and "big.py:5" in r.output
+    # 无 path 全目录搜
+    r = registry._search_file(tmp_path, {"pattern": "import os"})
+    assert r.ok and "big.py:1" in r.output
+    # 无匹配
+    r = registry._search_file(tmp_path, {"pattern": "zzz_nope"})
+    assert r.ok and "未找到匹配" in r.output
+    # 空 pattern
+    r = registry._search_file(tmp_path, {"pattern": ""})
+    assert "不能为空" in r.output
