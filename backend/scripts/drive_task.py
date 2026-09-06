@@ -3,6 +3,7 @@
 用法（backend/ 下）：
     python scripts/drive_task.py t2_missing_fn        # 跑 tasks/ 下某个任务包
     python scripts/drive_task.py t3_cross_file
+    python scripts/drive_task.py t1_single_fix --skills --mcp --memory   # M5 能力全开
 跑完 git restore 还原任务包（保持"带 bug 考卷"态）。
 """
 import argparse
@@ -18,6 +19,8 @@ from app.store import db  # noqa: E402
 
 TASKS = Path(__file__).resolve().parent.parent / "tasks"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+# M5 Skills 仓库（示例技能；`--skills` 时按 goal 语义匹配注入）
 
 
 def main():
@@ -26,6 +29,12 @@ def main():
     ap.add_argument("--model", default=None, help="覆盖 LLM 模型名（默认 config.LLM_MODEL，A/B 用）")
     ap.add_argument("--plan", action="store_true",
                     help="开 M4 planner：执行前先规划一次，计划注入上下文（advisory）")
+    ap.add_argument("--skills", action="store_true",
+                    help="开 M5 Skills：按 goal 匹配 SKILL.md 注入上下文")
+    ap.add_argument("--mcp", action="store_true",
+                    help="开 M5 MCP：连 demo server，动态注册其只读工具")
+    ap.add_argument("--memory", action="store_true",
+                    help="开 M5 长期记忆：注入同任务历史经验 + 结束沉淀")
     args = ap.parse_args()
 
     task_dir = TASKS / args.task_name
@@ -41,8 +50,14 @@ def main():
         return chat(messages)
 
     model_name = args.model or "config 默认"
-    loop = HarnessLoop(task_dir, goal, decider=decider, use_plan=args.plan)
-    print(f"run_id: {loop.run_id} | task: {loop.task_id} | model: {model_name}")
+    loop = HarnessLoop(
+        task_dir, goal, decider=decider, use_plan=args.plan,
+        use_skills=args.skills, skill_dir=str(SKILLS_DIR) if args.skills else None,
+        use_mcp=args.mcp,
+        use_memory=args.memory,
+    )
+    print(f"run_id: {loop.run_id} | task: {loop.task_id} | model: {model_name}"
+          f" | skills={args.skills} mcp={args.mcp} memory={args.memory}")
     print("=" * 60)
     result = loop.run()
     print("=" * 60)

@@ -13,7 +13,7 @@ import json
 import re
 from enum import Enum
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 class Tool(str, Enum):
@@ -24,11 +24,42 @@ class Tool(str, Enum):
     install_package = "install_package"   # M2：HIGH 权限占位，请求即审批拒绝+审计
 
 
+MCP_PREFIX = "mcp_"   # M5-B2：MCP 动态工具命名空间前缀（mcp_<server>__<tool>）
+
+
 class AgentStep(BaseModel):
     thought: str = Field(description="这步在想什么")
-    tool: Tool | None = Field(default=None, description="要调的工具；done=True 时可为空")
+    tool: Tool | str | None = Field(default=None, description="要调的工具；done=True 时可为空")
     args: dict = Field(default_factory=dict, description="工具参数")
     done: bool = Field(default=False, description="True=认为任务已完成")
+
+    @field_validator("tool")
+    @classmethod
+    def _tool_must_be_known_or_mcp(cls, v):
+        """工具白名单：内置枚举 或 MCP 前缀动态工具（M5-B2）。
+
+        内置工具仍走 Tool 枚举强校验（防模型幻觉乱拼名字）；
+        MCP 工具是运行时从 server 拉取注册的，枚举无法静态穷举，
+        放行 `mcp_` 前缀（执行时 registry.get_tool 才是最终白名单，
+        拉不到/没注册照样报"未知工具"）。
+        """
+        if v is None:
+            return v
+        if isinstance(v, str) and v.startswith(MCP_PREFIX):
+            return v
+        try:
+            return Tool(v)
+        except ValueError:
+            raise ValueError(
+                f"未知工具: {v!r}。可用: {[t.value for t in Tool]} 或 MCP 工具(mcp_ 前缀)") from None
+
+    @property
+    def tool_name(self) -> str | None:
+        """工具名的统一字符串形态（枚举 .value 或 mcp_ 原串）——loop 层用它分发。"""
+        t = self.tool
+        if t is None:
+            return None
+        return t.value if isinstance(t, Tool) else str(t)
 
 
 class StepParseError(Exception):

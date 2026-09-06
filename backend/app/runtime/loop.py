@@ -31,6 +31,7 @@ from ..tools.registry import (  # noqa: E402
 from .context import build_view
 from .plan import PLAN_PROMPT, PLAN_RETRY, AgentPlan, parse_plan, plan_to_text
 from .protocol import AgentStep, StepParseError, parse_step
+from ..skills.skill_registry import match_skills
 
 _SYSTEM_HEAD = """你是一个软件工程师 Agent，正在执行一个代码任务。
 每次输出必须是一段 JSON（不要多余文字），格式：
@@ -89,7 +90,12 @@ class HarnessLoop:
                  context_compress: bool = False,
                  keep_recent_steps: int = 3,
                  use_plan: bool = False,
-                 stall_warning: bool = False):
+                 stall_warning: bool = False,
+                 use_skills: bool = False,
+                 skill_dir: str | Path | None = None,
+                 use_mcp: bool = False,
+                 mcp_servers: list | None = None,
+                 use_memory: bool = False):
         """token_budget: 单 run token 上限（None=不启用护栏，默认无护栏）。
         meter: 外部共享的 token 计量 dict（decider 包装层累加 meter["tokens"]，
         loop 只读判断是否超限）——计量与决策解耦，任何 decider 都能挂护栏。
@@ -99,6 +105,15 @@ class HarnessLoop:
         通道），计划注入初始 user 消息随 checkpoint 持久化；resume 不重规划。
         stall_warning: O4 空转雷达的主动提醒开关——默认 False（雷达纯观测：trace+
         日志，不改执行流）；True=空转时把提醒注入上下文（长任务按需开）。
+        use_skills: M5 Skills 开关——开=按 goal 语义匹配 skills/ 目录里的 SKILL.md，
+        把命中技能指令注入 system prompt 尾部（随 checkpoint 持久化，resume 一致）。
+        skill_dir: skills 仓库根目录（目录/文件可复用，默认 skills/）。默认关→数字①口径不动。
+        use_mcp: M5 MCP 开关——开=启动时连 MCP server(s)（自研 stdio client），
+        tools/list 拉到的工具动态注册进注册表（mcp_<server>__<tool>），system prompt
+        工具说明书自动带上。mcp_servers: [{"name": ..., "cmd": [...]}]；缺省用
+        spawn_client 的默认 demo server。默认关→数字①口径不动。
+        use_memory: M5 长期记忆开关——开=run 开始时注入该任务历史记忆（经验复用），
+        run 结束沉淀新记忆（成功路径/失败教训）。默认关→数字①口径不动。
         """
         self.workspace = Path(task_dir)
         if not self.workspace.is_dir():
@@ -106,6 +121,12 @@ class HarnessLoop:
         self.goal = goal
         self.decider = decider
         self.stall_warning = stall_warning
+        self.use_skills = use_skills
+        self._skill_dir = skill_dir
+        self.use_mcp = use_mcp
+        self._mcp_servers = mcp_servers or []
+        self._mcp_clients: list = []      # 持有的 MCP client（run 结束统一 stop）
+        self.use_memory = use_memory
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self.task_id = task_id or self.workspace.name
         self.token_budget = token_budget
@@ -142,6 +163,20 @@ class HarnessLoop:
                 break
 
     # ---------- 对外入口 ----------
+    # ---------- 长期记忆（M5-B3） ----------
+    def _maybe_distill(self, result: dict) -> None:
+        """run 终态（done/failed）时沉淀长期记忆；paused/budget_paused 可续跑不沉淀。"""
+        if not self.use_memory:
+            return
+        status = result.get("status", "")
+        if status not in ("done", "failed"):
+            return
+        from .memory import distill
+        # 用 done_actions（含真实 tool/args）而非 trace（只有摘要）——沉淀需要 args 细节
+        actions = [dict(a) for a in self.done_actions]
+        distill(self.run_id, self.task_id, actions,
+                status, result.get("reason", ""))
+
     def run(self) -> dict:
         """从头执行一次 run。
 
@@ -153,13 +188,19 @@ class HarnessLoop:
         if db.get_run(self.run_id) is None:
             db.create_run(self.run_id, self.task_id, self.goal)
         db.update_run_status(self.run_id, "running")
-        self.messages = self._initial_messages(self.goal, fresh=True)
-        if self.use_plan and db.get_plan(self.run_id) is None:
-            plan = self._plan_once()
-            if plan is not None:  # None = 重试耗尽降级，无计划照常执行
-                self.messages[1] = dict(self.messages[1])
-                self.messages[1]["content"] += "\n\n" + plan_to_text(plan)
-        return self._run_loop(start_step=1)
+        self._setup_mcp()   # M5-B2：MCP server(s) 接入（幂等；失败降级不拖垮 run）
+        try:
+            self.messages = self._initial_messages(self.goal, fresh=True)
+            if self.use_plan and db.get_plan(self.run_id) is None:
+                plan = self._plan_once()
+                if plan is not None:  # None = 重试耗尽降级，无计划照常执行
+                    self.messages[1] = dict(self.messages[1])
+                    self.messages[1]["content"] += "\n\n" + plan_to_text(plan)
+            result = self._run_loop(start_step=1)
+            self._maybe_distill(result)   # M5-B3：终态沉淀记忆
+            return result
+        finally:
+            self._close_mcp()
 
     def resume(self, approve_budget: bool = False) -> dict:
         """从最后 checkpoint 续跑（MVP 底线 2/3/4 交汇点）。
@@ -184,39 +225,100 @@ class HarnessLoop:
         cp = db.last_checkpoint(self.run_id)
         if cp is None:
             return self.run()
-        # 漂移识别（底线3）：工作区被外部改动（git restore/手动编辑）→ 续跑上下文已过期
-        cur_hash = _ws_hash(self.workspace)
-        saved_hash = cp["ws_hash"] or ""
-        if saved_hash and cur_hash != saved_hash:
-            db.update_run_status(self.run_id, "failed")
-            raise LoopError(
-                f"[工作区漂移] 拒绝续跑：checkpoint 存档 ws_hash={saved_hash[:12]}，"
-                f"当前工作区 {cur_hash[:12]}。任务包被外部改动过（如 git restore、手动编辑），"
-                "基于过期上下文续跑会出错。处理：git restore 还原任务包后重跑本任务，"
-                "或确认改动无害后删除该 run 重开。")
+        self._setup_mcp()   # M5-B2：resume 续跑同样需要 MCP 工具（幂等）
         try:
-            self.done_actions = json.loads(cp["done_actions"] or "[]")
-        except json.JSONDecodeError:
-            self.done_actions = []
-        try:
-            self.messages = json.loads(cp["ctx_messages"] or "[]")
-        except json.JSONDecodeError:
-            self.messages = []
-        if not self.messages:
-            self.messages = self._initial_messages(run["goal"] or self.goal, fresh=False)
-        # 预算计量恢复：checkpoint 记录的历史 token 回填 meter（护栏跨 resume 生效）
-        if self.meter is not None:
-            self.meter["tokens"] = int(cp["tokens_used"] or 0)
-        start = int(cp["step"]) + 1
-        self._rebuild_verification_state()
-        print(f"[resume] 从 checkpoint step={cp['step']} 续跑，已完成 "
-              f"{len(self.done_actions)} 个动作（不重放）")
-        return self._run_loop(start_step=start)
+            # 漂移识别（底线3）：工作区被外部改动（git restore/手动编辑）→ 续跑上下文已过期
+            cur_hash = _ws_hash(self.workspace)
+            saved_hash = cp["ws_hash"] or ""
+            if saved_hash and cur_hash != saved_hash:
+                db.update_run_status(self.run_id, "failed")
+                raise LoopError(
+                    f"[工作区漂移] 拒绝续跑：checkpoint 存档 ws_hash={saved_hash[:12]}，"
+                    f"当前工作区 {cur_hash[:12]}。任务包被外部改动过（如 git restore、手动编辑），"
+                    "基于过期上下文续跑会出错。处理：git restore 还原任务包后重跑本任务，"
+                    "或确认改动无害后删除该 run 重开。")
+            try:
+                self.done_actions = json.loads(cp["done_actions"] or "[]")
+            except json.JSONDecodeError:
+                self.done_actions = []
+            try:
+                self.messages = json.loads(cp["ctx_messages"] or "[]")
+            except json.JSONDecodeError:
+                self.messages = []
+            if not self.messages:
+                self.messages = self._initial_messages(run["goal"] or self.goal, fresh=False)
+            # 预算计量恢复：checkpoint 记录的历史 token 回填 meter（护栏跨 resume 生效）
+            if self.meter is not None:
+                self.meter["tokens"] = int(cp["tokens_used"] or 0)
+            start = int(cp["step"]) + 1
+            self._rebuild_verification_state()
+            print(f"[resume] 从 checkpoint step={cp['step']} 续跑，已完成 "
+                  f"{len(self.done_actions)} 个动作（不重放）")
+            result = self._run_loop(start_step=start)
+            self._maybe_distill(result)   # M5-B3：resume 到终态同样沉淀
+            return result
+        finally:
+            self._close_mcp()
 
     def _initial_messages(self, goal: str, fresh: bool) -> list:
         tail = "工作区已就绪，请开始。" if fresh else "工作区已就绪，请继续你上次未完成的修复。"
-        return [{"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": "任务目标：" + goal + chr(10) + tail}]
+        system = self._system_prompt()
+        if self.use_skills:
+            matched = match_skills(self._skill_dir, goal)
+            if matched:
+                blocks = "\n\n".join(s.render() for s in matched)
+                system = system + ("\n\n以下是与本任务相关的技能说明（Skill），"
+                                   "按其指引行事，与任务规则冲突时以任务目标为准：\n\n" + blocks)
+        user = "任务目标：" + goal + chr(10) + tail
+        if self.use_memory:
+            from .memory import render_for_goal
+            mem = render_for_goal(self.task_id)
+            if mem:
+                user += "\n\n" + mem
+        return [{"role": "system", "content": system},
+                {"role": "user", "content": user}]
+
+    def _system_prompt(self) -> str:
+        """system prompt：use_mcp 时动态重算（MCP 工具运行期才注册，静态常量不含）。"""
+        if not self.use_mcp:
+            return SYSTEM_PROMPT
+        return _SYSTEM_HEAD + "\n可用工具（注册表生成，含 MCP 动态工具）:\n" + describe_tools()
+
+    # ---------- MCP 接入（M5-B2） ----------
+    def _setup_mcp(self) -> None:
+        """启动 MCP server(s) 并注册其工具（幂等；重复调用不重复 spawn）。
+
+        - use_mcp=False / 已有 client 在跑 → 直接返回
+        - 每个 server：spawn client → start（initialize 握手）→ tools/list →
+          register_mcp_tools 动态注册进注册表（system prompt 由 describe_tools
+          重新生成时自动带上，_rebuild_system 见下）
+        - server 起不来/工具拉空 → 记日志降级（不拖垮 run：MCP 是增量能力）
+        """
+        if not self.use_mcp or self._mcp_clients:
+            return
+        from ..mcp.mcp_client import spawn_client
+        from ..tools.registry import register_mcp_tools
+        servers = self._mcp_servers or [{"name": "demo"}]  # 缺省 demo server
+        for cfg in servers:
+            name = cfg.get("name", "demo")
+            try:
+                client = spawn_client(name)
+                client.start()
+                tools = client.list_tools()
+                n = register_mcp_tools(name, client, tools)
+                self._mcp_clients.append(client)
+                print(f"[mcp] server={name} 已连，注册 {n} 个工具: "
+                      f"{[t.name for t in tools]}", flush=True)
+            except Exception as e:  # noqa: BLE001 - MCP 起不来是增量失败，不拖垮 run
+                print(f"[mcp] server={name} 接入失败（降级继续）: {e}", flush=True)
+
+    def _close_mcp(self) -> None:
+        for c in self._mcp_clients:
+            try:
+                c.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        self._mcp_clients = []
 
     # ---------- 规划阶段（M4 planner，P1/P3/P4） ----------
     def _plan_once(self) -> AgentPlan | None:
@@ -282,9 +384,9 @@ class HarnessLoop:
                     self.messages.append({"role": "user", "content": dup})
                     continue
                 # HIGH 工具审批（M2）：模型请求高危工具 → 拒绝 + 审计记录，喂回提示继续
-                spec = get_tool(act.tool.value) if act.tool else None
+                spec = get_tool(act.tool_name) if act.tool_name else None
                 if spec is not None and spec.perm >= Perm.HIGH:
-                    deny = approval.deny_high_tool(self.run_id, act.tool.value)
+                    deny = approval.deny_high_tool(self.run_id, act.tool_name or "")
                     self.messages.append({"role": "user", "content": deny})
                     continue
                 self._execute(act, step)
@@ -366,19 +468,20 @@ class HarnessLoop:
         （如 edit_file 成功后再次提交同一 old——此时 old 已被替换，必然失败）。
         返回空串 = 放行；否则返回喂回模型的拦截消息。
         """
-        if act.done or act.tool is None or act.tool.value not in ("edit_file", "write_file"):
+        tool_name = act.tool_name
+        if act.done or tool_name not in ("edit_file", "write_file"):
             return ""
         prev = self._prev_action
         if not prev or prev.get("args") is None:
             return ""  # resume 场景 args 不可比时宁漏勿误
-        if prev["tool"] == act.tool.value and prev["args"] == act.args:
-            return (f"你上一步已成功执行过完全相同的 {act.tool.value}（参数一致），"
+        if prev["tool"] == tool_name and prev["args"] == act.args:
+            return (f"你上一步已成功执行过完全相同的 {tool_name}（参数一致），"
                     "不要重复提交同一操作。请 read_file 确认当前文件实际状态，"
                     "或 run_tests 验证进度，再决定下一步。")
 
     # ---------- 工具执行 ----------
     def _execute(self, act: AgentStep, step: int) -> dict:
-        tool = act.tool.value if act.tool else ""
+        tool = act.tool_name or ""
         args = act.args or {}
         # 1) 查注册表：工具必须存在，且权限未超 MED（HIGH 由 _run_loop 审批拦截，此处兜底）
         spec = get_tool(tool)

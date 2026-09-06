@@ -188,6 +188,47 @@ def list_tool_names() -> list[str]:
     return list(TOOLS)
 
 
+def register_mcp_tools(server_name: str, client, tools: list) -> int:
+    """把 MCP server 拉到的工具动态注册进 TOOLS（M5-B2）。
+
+    命名空间: `mcp_<server>__<tool>`（例 mcp_demo__sqlite_query），与本地工具
+    同表同源——describe_tools / get_tool / 审计 trace 全走同一注册表，决策协议
+    不改结构（loop 校验只放行内置枚举或 mcp_ 前缀）。
+    handler 闭包持有 client：执行即 MCP tools/call，返回文本与本地工具同形态。
+    权限定 LOW（只读）：server 侧 demo 只暴露只读工具；若要写类 MCP 工具应提级。
+    返回注册数；同名已注册则跳过（重复 spawn 幂等）。
+    """
+    count = 0
+    for t in tools:
+        name = f"mcp_{server_name}__{t.name}"
+        if name in TOOLS:
+            continue
+        def _handler(workspace, args, _t=t, _client=client):
+            try:
+                text = _client.call_tool(_t.name, args or {})
+                return ToolResult(text, ok=True)
+            except Exception as e:  # noqa: BLE001 - MCP 层错误统一转 ToolError
+                raise ToolError(f"MCP {_t.name} 调用失败: {e}") from e
+        TOOLS[name] = ToolSpec(
+            name=name,
+            description=f"[MCP:{t.server}] {t.description}",
+            args_hint=t.args_hint,
+            perm=Perm.LOW,
+            handler=_handler,
+        )
+        count += 1
+    return count
+
+
+def unregister_mcp_tools(server_name: str) -> int:
+    """按 server 名卸载动态注册的 MCP 工具（测试隔离 / server 重连用）。"""
+    prefix = f"mcp_{server_name}__"
+    removed = [n for n in TOOLS if n.startswith(prefix)]
+    for n in removed:
+        del TOOLS[n]
+    return len(removed)
+
+
 def describe_tools() -> str:
     """生成 system prompt 里的工具说明书（与注册表同源，不会说一套做一套）。"""
     lines = []

@@ -52,16 +52,19 @@ backend/
 │   ├── runtime/
 │   │   ├── loop.py            # 自研 agent loop：决策→执行→checkpoint→trace
 │   │   ├── protocol.py        # JSON 决策协议（thought/tool/args/done）+ Pydantic 校验
+│   │   ├── memory.py          # 长期记忆（M5）：跨 run 经验沉淀/复用（成功路径/失败教训）
 │   │   └── llm.py             # LLM 薄封装（openai 兼容，智谱，可换模型）
 │   ├── tools/
-│   │   ├── registry.py        # 工具注册表：权限分级 LOW/MED/HIGH + 工具说明书同源
+│   │   ├── registry.py        # 工具注册表：权限分级 LOW/MED/HIGH + 工具说明书同源 + MCP 动态注册
 │   │   └── sandbox_exec.py    # 轻量沙箱：复制执行 + utf-8 强制 + 超时进程树强杀
+│   ├── skills/                # Skill 注册体系（M5）：SKILL.md 解析/发现/goal 语义匹配
+│   ├── mcp/                   # MCP 最小实现（M5）：自研 stdio client + demo server
 │   ├── verifier/pytest_runner.py  # pytest 结构化解析（红 N 条 / 文件:行 / 断言消息）
-│   ├── store/db.py            # SQLite：runs/checkpoints/traces/usage/approvals/plans（WAL）
+│   ├── store/db.py            # SQLite：runs/checkpoints/traces/usage/approvals/plans/memories（WAL）
 │   └── trace/                 # 事件 trace 记录
 ├── tasks/                     # T1~T3 手写任务包（module + 测试 + README，git 作还原点）
 ├── scripts/                   # drive_task/run_all/run_resume_test/measure_*（实测工具）
-├── tests/                     # 52 个单元测试（含真沙箱跑任务包）
+├── tests/                     # 81 个单元测试（含真沙箱跑任务包）
 └── pytest.ini                 # 回归只收 tests/，排除任务包"考卷"
 ```
 
@@ -73,6 +76,9 @@ backend/
 - **checkpoint/resume**：每步全量存档上下文，进程被杀从断点续跑、不重放已完成动作（实测 3/3）；resume 前比对工作区 hash 识别外部漂移
 - **分层上下文压缩**（M3，可开关）：system+目标全文、近 3 步消息全文、更早历史每步压成一行摘要——只影响决策视图，全量消息仍存档，压缩与可恢复性正交
 - **任务规划器**（M4，`--plan` 按需开）：执行前先一次规划（Pydantic 强校验 + 重试），计划注入上下文当 advisory 参考、随 checkpoint 持久化（resume 不重规划）——非硬调度，执行仍 agentic，保住 self-repair
+- **Skills**（M5，`--skills` 按需开）：SKILL.md 目录协议自研实现（frontmatter name/description + 正文），按任务 goal 语义匹配注入 system——对标 Anthropic Skills 标准的轻量落地，不引框架
+- **MCP**（M5，`--mcp` 按需开）：自研最小 stdio MCP client（initialize 握手/tools/list/tools/call），demo server 工具动态注册进工具表（`mcp_<server>__<tool>`），与本地工具同源同审计——协议自研不依赖官方 SDK
+- **长期记忆**（M5，`--memory` 按需开）：run 结束沉淀（成功路径/失败教训 → memories 表），下次同任务 run 注入复用——短期记忆=checkpoint（断点续跑），长期记忆=跨 run 经验（不重踩坑）
 - **沙箱隔离**：任务包复制执行、源目录只读；`git restore` 一键重置"考卷"
 
 ## 快速开始
@@ -91,13 +97,18 @@ python scripts/drive_task.py t2_missing_fn --model glm-4.5-flash   # 免费档�
 # 3. 回归表（数字①，含自愈重试）
 python scripts/run_all.py --model glm-4.5-flash --repeat 2
 
-# 4. 韧性实测（M3/M4）
+# 4. 韧性实测（M3/M4/M5）
 python scripts/run_resume_test.py --task t1_single_fix --kill-points 2,3,4   # 数字② 杀进程恢复率
 python scripts/measure_compress.py --task t2_missing_fn                      # 数字③ 压缩率（开关对比）
 python scripts/measure_plan.py --task t2_missing_fn                          # 数字④ planner A/B（plan vs no-plan）
 # 开 planner 跑任务/回归（默认关）：drive_task.py t2_missing_fn --plan / run_all.py --plan
 
-# 5. 单元测试
+# 5. M5 能力（默认关，演示按需开；全部经同一注册表/审计链）
+python scripts/drive_task.py t1_single_fix --skills   # Skills：SKILL.md 匹配注入
+python scripts/drive_task.py t1_single_fix --mcp      # MCP：连 demo server 动态注册工具
+python scripts/drive_task.py t1_single_fix --memory   # 长期记忆：复用历史经验 + 沉淀
+
+# 6. 单元测试
 python -m pytest tests/ -q
 ```
 
@@ -118,3 +129,4 @@ python -m pytest tests/ -q
 | W4~5 | M3：压缩开关（数字③）+ 杀 N 次测恢复率（数字②） | ✅ 2026-09-04（数字② 3/3、数字③ 12.3% 压缩且绿，commit 1e144d2） |
 | W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | ✅ 2026-09-04~05（Day5 A/B + 24 步 55.5% 上界，commit 6eba0ea） |
 | W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | ✅ 2026-09-06 收官（B1~B4 + B6a 背靠背 9b151cd/d323d65 + B6b 归档 87cc0f1 + B6c 文档收官；O1-O6 精益优化 78ddfcd，单测 52/52；B5 最简 UI 未做——Q10 余力项，保持待拍板） |
+| W9 | M5：JD 关键词补强——Skills 注册 + MCP（自研 client+demo server）+ 长期记忆（详见 [执行计划_M5.md](docs/执行计划_M5.md)） | ✅ 2026-09-06（Skills/MCP/记忆 29 新测，单测 52→81；真机三开关全开 T1 全绿；三模块默认关不碰 6/6 基线） |

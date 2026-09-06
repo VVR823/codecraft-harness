@@ -66,6 +66,14 @@ CREATE TABLE IF NOT EXISTS plans (
     status TEXT NOT NULL DEFAULT 'ok',       -- ok | failed（重试耗尽降级）
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS memories (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,       -- 归属任务（按任务检索复用）
+    run_id TEXT NOT NULL,        -- 来源 run（审计可溯）
+    kind  TEXT NOT NULL,         -- success_path | failure_lesson | fact
+    content TEXT NOT NULL,       -- 记忆正文（给后续 run 注入的提示）
+    created_at TEXT NOT NULL
+);
 """
 
 _lock = threading.Lock()
@@ -228,3 +236,28 @@ def get_plan(run_id: str) -> sqlite3.Row | None:
         return conn.execute(
             "SELECT * FROM plans WHERE run_id=?", (run_id,)
         ).fetchone()
+
+
+# ---------------- memories（M5-B3 长期记忆） ----------------
+
+def save_memory(task_id: str, run_id: str, kind: str, content: str) -> None:
+    """跨 run 长期记忆：run 结束沉淀一条经验（成功后路径 / 失败教训）。"""
+    if not content.strip():
+        return
+    with _lock, _conn() as conn:
+        conn.execute(
+            "INSERT INTO memories(task_id, run_id, kind, content, created_at)"
+            " VALUES(?,?,?,?,?)",
+            (task_id, run_id, kind, content.strip(), _now()),
+        )
+
+
+def get_memories_for_task(task_id: str, limit: int = 3) -> list[dict]:
+    """按任务检索历史记忆（新 run 开始时注入；同任务跨 run 复用经验）。"""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT task_id, run_id, kind, content, created_at FROM memories"
+            " WHERE task_id=? ORDER BY id DESC LIMIT ?",
+            (task_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
