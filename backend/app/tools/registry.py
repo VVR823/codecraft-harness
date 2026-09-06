@@ -103,8 +103,9 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
         return ToolResult(content)
     cap_note = (f"\n...[文件共 {total} 行 / {len(content)} 字符，超过单次读取上限，"
                 f"当前仅显示前 {READ_FILE_CAP} 字符]...\n"
-                f"需要看后面的内容请用 read_file 分页：{{\"path\": \"{str(args.get('path',''))}\", "
-                f"\"offset\": 行号, \"limit\": 行数}}（offset 从 1 开始）")
+                f"注意：大文件不要逐页通读！若你在找特定定义/引用（函数名、变量名、格式名等），"
+                f"用 search_file 直接定位（{{\"pattern\": \"关键词\", \"path\": \"{str(args.get('path',''))}\"}}）"
+                f"拿到文件:行号后，再 read_file 分页精读目标区间。")
     return ToolResult(_truncate(content, READ_FILE_CAP) + cap_note)
 
 
