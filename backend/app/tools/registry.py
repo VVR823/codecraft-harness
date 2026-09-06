@@ -70,7 +70,35 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
     if not path.is_file():
         raise ToolError(f"文件不存在: {path}")
     content = path.read_text(encoding="utf-8", errors="replace")
-    return ToolResult(_truncate(content, READ_FILE_CAP))
+    lines = content.splitlines()
+    total = len(lines)
+
+    # 分页读取：offset=起始行(1-based，默认 1)，limit=最多读多少行（默认全读后再截断兜底）
+    offset = args.get("offset", 1)
+    limit = args.get("limit", 0)
+    try:
+        offset = int(offset) if offset not in (None, "") else 1
+        limit = int(limit) if limit not in (None, "") else 0
+    except (TypeError, ValueError):
+        raise ToolError("offset/limit 必须是整数行号")
+    if offset < 1:
+        raise ToolError("offset 必须 >= 1（1-based 行号）")
+    if limit < 0:
+        raise ToolError("limit 必须 >= 0（0=不限）")
+
+    if limit > 0:
+        seg = "\n".join(lines[offset - 1: offset - 1 + limit])
+        end = min(offset - 1 + limit, total)
+        return ToolResult(_truncate(seg, READ_FILE_CAP))
+
+    # 全文（自动截断防上下文爆炸）
+    if len(content) <= READ_FILE_CAP:
+        return ToolResult(content)
+    cap_note = (f"\n...[文件共 {total} 行 / {len(content)} 字符，超过单次读取上限，"
+                f"当前仅显示前 {READ_FILE_CAP} 字符]...\n"
+                f"需要看后面的内容请用 read_file 分页：{{\"path\": \"{str(args.get('path',''))}\", "
+                f"\"offset\": 行号, \"limit\": 行数}}（offset 从 1 开始）")
+    return ToolResult(_truncate(content, READ_FILE_CAP) + cap_note)
 
 
 def _syntax_check(path: Path, content: str) -> str | None:
@@ -140,8 +168,10 @@ def _run_tests(workspace: Path, args: dict) -> ToolResult:
 TOOLS: dict[str, ToolSpec] = {
     "read_file": ToolSpec(
         name="read_file",
-        description="读取任务目录内的文件全文",
-        args_hint='{"path": "utils.py"}',
+        description="读取任务目录内的文件。小文件直接读全文；大文件超过 6000 字符会自动截断并提示，"
+                    "此时用 offset(起始行,1-based)/limit(行数) 分页读取后续内容（如读 200 行起："
+                    "offset=200, limit=100）",
+        args_hint='{"path": "utils.py"} 或大文件分页 {"path": "big.py", "offset": 200, "limit": 100}',
         perm=Perm.LOW,
         handler=_read_file,
     ),

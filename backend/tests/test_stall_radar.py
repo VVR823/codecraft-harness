@@ -105,3 +105,73 @@ def test_warning_not_injected_by_default(tmp_path):
     loop._stall_radar()
     assert loop.messages == []
     assert len(_stall_traces(loop)) == 1  # trace 仍记录（观测不缺席）
+
+
+# ---------- read_file 重复拦截（T4 大文件死循环实证补的防复发） ----------
+
+def test_dup_read_same_range_blocked(tmp_path):
+    """连续两次 read_file 同一文件同一区间 → 拦截并给转向提示。"""
+    loop = _mk_loop(tmp_path)
+    step = {"thought": "再读一次", "tool": "read_file",
+            "args": {"path": "big.py", "offset": 590, "limit": 15}, "done": False}
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(**step)
+    # 上一步是同一文件同一区间
+    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
+    msg = loop._dup_action_block(act)
+    assert msg and "同一文件同一区间" in msg
+
+
+def test_dup_read_diff_range_allowed(tmp_path):
+    """同一文件但区间不同（offset 变了）→ 放行（分页前进是合法的）。"""
+    loop = _mk_loop(tmp_path)
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="翻页看后面", tool="read_file",
+                    args={"path": "big.py", "offset": 600, "limit": 15}, done=False)
+    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
+    assert loop._dup_action_block(act) == ""
+
+
+def test_dup_read_diff_file_allowed(tmp_path):
+    """换了个文件读 → 放行。"""
+    loop = _mk_loop(tmp_path)
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="读另一个文件", tool="read_file",
+                    args={"path": "other.py"}, done=False)
+    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
+    assert loop._dup_action_block(act) == ""
+
+
+# ---------- read_file 重复拦截（T4 大文件死循环实证补的防复发） ----------
+
+def test_dup_read_same_range_blocked(tmp_path):
+    """连续两次 read_file 同一文件同一区间 → 拦截并给转向提示。"""
+    loop = _mk_loop(tmp_path)
+    step = {"thought": "再读一次", "tool": "read_file",
+            "args": {"path": "big.py", "offset": 590, "limit": 15}, "done": False}
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(**step)
+    # 上一步是同一文件同一区间
+    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
+    msg = loop._dup_action_block(act)
+    assert msg and "同一文件同一区间" in msg
+
+
+def test_dup_read_diff_range_allowed(tmp_path):
+    """同一文件但区间不同（offset 变了）→ 放行（分页前进是合法的）。"""
+    loop = _mk_loop(tmp_path)
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="翻页看后面", tool="read_file",
+                    args={"path": "big.py", "offset": 600, "limit": 15}, done=False)
+    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
+    assert loop._dup_action_block(act) == ""
+
+
+def test_dup_read_diff_file_allowed(tmp_path):
+    """换了个文件读 → 放行。"""
+    loop = _mk_loop(tmp_path)
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="读另一个文件", tool="read_file",
+                    args={"path": "other.py"}, done=False)
+    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
+    assert loop._dup_action_block(act) == ""

@@ -36,7 +36,9 @@ from ..skills.skill_registry import match_skills
 _SYSTEM_HEAD = """你是一个软件工程师 Agent，正在执行一个代码任务。
 每次输出必须是一段 JSON（不要多余文字），格式：
 {"thought": "这步在想什么", "tool": "read_file|edit_file|write_file|run_tests", "args": {"...": "..."}, "done": false}
-- read_file: args={"path": "相对任务目录的路径"}
+- read_file: args={"path": "相对任务目录的路径"}。若输出尾部出现"超过单次读取上限"，说明文件很大只显示了开头，
+  要用分页继续读：args={"path": "...", "offset": 起始行号(1开始), "limit": 行数}；大文件先 read_file 看全貌定位，
+  再分页读目标区间，不要反复读同一段。
 - edit_file: args={"path": "...", "old": "要替换的原文片段(必须与文件完全一致且唯一)", "new": "新片段"}——改已有代码优先用它
 - write_file: args={"path": "...", "content": "..."}，content 是文件全文
 - run_tests: args={}（跑任务目录的 pytest）
@@ -469,15 +471,28 @@ class HarnessLoop:
         返回空串 = 放行；否则返回喂回模型的拦截消息。
         """
         tool_name = act.tool_name
-        if act.done or tool_name not in ("edit_file", "write_file"):
+        if act.done:
             return ""
         prev = self._prev_action
         if not prev or prev.get("args") is None:
             return ""  # resume 场景 args 不可比时宁漏勿误
-        if prev["tool"] == tool_name and prev["args"] == act.args:
+        if tool_name == "read_file" and prev["tool"] == "read_file":
+            # 连续两次读同一文件同一区间 = 模型在空转（拿不到新信息还反复读）。
+            # 免费模型大文件死循环实证：T4 真实库 test_regression.py 600 行超截断上限，
+            # 模型 14 步重复 read_file 同一文件直到预算暂停。这里第一步就拦，引导转向。
+            p1 = prev["args"].get("path")
+            p2 = (act.args or {}).get("path")
+            o1, o2 = prev["args"].get("offset"), (act.args or {}).get("offset")
+            l1, l2 = prev["args"].get("limit"), (act.args or {}).get("limit")
+            if p1 == p2 and o1 == o2 and l1 == l2:
+                return (f"你已连续两次 read_file 同一文件同一区间（{p1}），没有拿到新信息。"
+                        "请换动作：run_tests 看失败详情，或用 offset/limit 分页读文件的其他区间，"
+                        "或直接 edit_file 修复。不要原地重复读。")
+        if tool_name in ("edit_file", "write_file") and prev["tool"] == tool_name and prev["args"] == act.args:
             return (f"你上一步已成功执行过完全相同的 {tool_name}（参数一致），"
                     "不要重复提交同一操作。请 read_file 确认当前文件实际状态，"
                     "或 run_tests 验证进度，再决定下一步。")
+        return ""
 
     # ---------- 工具执行 ----------
     def _execute(self, act: AgentStep, step: int) -> dict:
