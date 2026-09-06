@@ -175,3 +175,51 @@ def test_dup_read_diff_file_allowed(tmp_path):
                     args={"path": "other.py"}, done=False)
     loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
     assert loop._dup_action_block(act) == ""
+
+
+# ---------- read_file 分页（T4 第二次失败补的边界处理） ----------
+
+def test_read_file_pagination_bounds(tmp_path):
+    """分页边界：offset=0 clamp、越界提示、非整数提示、末尾锚点——都不抛错。"""
+    from app.tools import registry
+    (tmp_path / "big.py").write_text("\n".join(f"line{i}" for i in range(1, 601)))
+    ws = tmp_path
+    # offset=0 → clamp 到 1
+    r = registry._read_file(ws, {"path": "big.py", "offset": 0, "limit": 3})
+    assert r.ok and "[行 1-3" in r.output
+    # 越界 → 提示不崩
+    r = registry._read_file(ws, {"path": "big.py", "offset": 9999, "limit": 3})
+    assert r.ok and "超出文件范围" in r.output
+    # 非整数 → 提示不崩
+    r = registry._read_file(ws, {"path": "big.py", "offset": "abc"})
+    assert r.ok and "整数行号" in r.output
+    # 末尾锚点
+    r = registry._read_file(ws, {"path": "big.py", "offset": 598, "limit": 100})
+    assert r.ok and "已到文件末尾" in r.output and "共 600 行" in r.output
+    # 小文件全文直读不受影响（无截断提示）
+    r = registry._read_file(ws, {"path": "big.py"})
+    assert r.ok and "[行" not in r.output
+
+
+# ---------- read_file 分页（T4 第二次失败补的边界处理） ----------
+
+def test_read_file_pagination_bounds(tmp_path):
+    """分页边界：offset=0 clamp、越界提示、非整数提示、末尾锚点——都不抛错。"""
+    from app.tools import registry
+    (tmp_path / "big.py").write_text("\n".join(f"line{i}" for i in range(1, 601)))
+    ws = tmp_path
+    # offset=0 → clamp 到 1
+    r = registry._read_file(ws, {"path": "big.py", "offset": 0, "limit": 3})
+    assert r.ok and "[行 1-3" in r.output
+    # 越界 → 提示不崩
+    r = registry._read_file(ws, {"path": "big.py", "offset": 9999, "limit": 3})
+    assert r.ok and "超出文件范围" in r.output
+    # 非整数 → 提示不崩
+    r = registry._read_file(ws, {"path": "big.py", "offset": "abc"})
+    assert r.ok and "整数行号" in r.output
+    # 末尾锚点
+    r = registry._read_file(ws, {"path": "big.py", "offset": 598, "limit": 100})
+    assert r.ok and "已到文件末尾" in r.output and "共 600 行" in r.output
+    # 小文件全文直读不受影响（无截断提示）
+    r = registry._read_file(ws, {"path": "big.py"})
+    assert r.ok and "[行" not in r.output

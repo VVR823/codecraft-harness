@@ -73,23 +73,30 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
     lines = content.splitlines()
     total = len(lines)
 
-    # 分页读取：offset=起始行(1-based，默认 1)，limit=最多读多少行（默认全读后再截断兜底）
+    # 分页读取：offset=起始行(1-based，默认 1)，limit=最多读多少行。
+    # 参数宽容处理：非法值 clamp 到合法范围（模型传错不整局崩，只提示）。
     offset = args.get("offset", 1)
     limit = args.get("limit", 0)
     try:
         offset = int(offset) if offset not in (None, "") else 1
         limit = int(limit) if limit not in (None, "") else 0
     except (TypeError, ValueError):
-        raise ToolError("offset/limit 必须是整数行号")
+        return ToolResult("offset/limit 必须是整数行号。示例: {\"offset\": 100, \"limit\": 50}")
     if offset < 1:
-        raise ToolError("offset 必须 >= 1（1-based 行号）")
+        offset = 1  # clamp：模型传 0/负数时从第 1 行读，不崩
     if limit < 0:
-        raise ToolError("limit 必须 >= 0（0=不限）")
+        limit = 0
+    if offset > total:
+        return ToolResult(f"offset={offset} 超出文件范围：该文件共 {total} 行（最后一行是第 {total} 行）。"
+                          "往回读，或先确认你要找的内容在哪个区间。")
 
     if limit > 0:
+        end = min(offset + limit - 1, total)
         seg = "\n".join(lines[offset - 1: offset - 1 + limit])
-        end = min(offset - 1 + limit, total)
-        return ToolResult(_truncate(seg, READ_FILE_CAP))
+        header = f"[行 {offset}-{end} / 共 {total} 行]"
+        if end >= total:
+            header += "（已到文件末尾）"
+        return ToolResult(_truncate(header + "\n" + seg, READ_FILE_CAP))
 
     # 全文（自动截断防上下文爆炸）
     if len(content) <= READ_FILE_CAP:
