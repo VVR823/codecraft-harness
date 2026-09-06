@@ -13,9 +13,11 @@
 2. `render_for_goal(task_id)` — run 开始时调用。检索该任务历史记忆，
    渲染成注入 user 消息的段落（放 goal 之后）。
 
-只入不出会无限膨胀 → 每任务只留最近 N 条（db 层 LIMIT），沉淀时同 kind
-去重（同任务同 kind 只保留最新，旧的下沉——简单实现：写入时若同 kind 已
-存在则先删旧的）。
+只入不出会无限膨胀，防膨胀落在两端（面试可指代码）：
+- 写入端（db.save_memory）：同 kind 去重——先 INSERT 再删同 task 同 kind
+  旧记录（同任务同 kind 只保留最新，旧的下沉）；每任务总量封顶
+  MAX_MEMORIES_PER_TASK（超出删最旧）。distill 每次沉淀都走这条路。
+- 读取端（render_for_goal limit=3）：只控注入量，不承担防膨胀。
 """
 from __future__ import annotations
 
@@ -56,7 +58,8 @@ def distill(run_id: str, task_id: str, actions: list[dict],
         if not writes:
             return None
         content = f"[成功路径] 上次该任务修到全绿的关键改动：{writes}"
-        db.save_memory(task_id, run_id, KIND_SUCCESS, content)
+        db.save_memory(task_id, run_id, KIND_SUCCESS, content,
+                       max_per_task=MAX_MEMORIES_PER_TASK)
         return content
     # 失败：reason（LLM 错误/超预算/步数耗尽/漂移拒绝）
     brief = (reason or "")[:200]

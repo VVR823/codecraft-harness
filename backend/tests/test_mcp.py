@@ -72,6 +72,49 @@ def test_stop_terminates_child():
     assert c.proc is None  # stop 后引用清空
 
 
+# ---------- 读超时（半挂 server 不卡死） ----------
+
+def _hang_client(read_timeout: float = 2.0) -> MCPClient:
+    """spawn 半挂 server（握手后对所有请求不回帧）的 client。"""
+    py = sys.executable
+    server_py = Path(__file__).resolve().parent / "fixtures" / "hang_server.py"
+    return MCPClient("hang", [py, str(server_py)], read_timeout=read_timeout)
+
+
+def test_read_timeout_on_half_dead_server():
+    """半挂 server：读应在 read_timeout 内抛 MCPError，不永久阻塞整个 loop。"""
+    import time as _time
+    from app.mcp.mcp_client import MCPError
+    c = _hang_client(read_timeout=2.0)
+    t0 = _time.monotonic()
+    c.start()  # initialize 正常回；initialized notify 后 server 挂死
+    try:
+        with pytest.raises(MCPError) as ei:
+            c.list_tools()  # 写请求 → 读超时 → 抛错（不是挂死）
+        assert ("超时" in str(ei.value)) or ("半挂" in str(ei.value))
+        assert c._broken
+        assert _time.monotonic() - t0 < 10  # 2s 超时 + 余量，绝非无限阻塞
+        # broken 态下任何请求直接拒绝，不再触碰悬挂读线程
+        with pytest.raises(MCPError):
+            c.list_tools()
+    finally:
+        c.stop()  # terminate 半挂进程（悬挂读线程随 EOF 退出），不抛
+    assert c.proc is None
+
+
+def test_start_recovers_after_broken():
+    """broken 后 start() 自动清掉半挂旧进程再重建（可再次握手）。"""
+    from app.mcp.mcp_client import MCPError
+    c = _hang_client(read_timeout=2.0)
+    c.start()
+    with pytest.raises(MCPError):
+        c.list_tools()  # 触发 broken
+    assert c._broken
+    c.start()  # broken → 内部先 stop 旧进程 → 重新 Popen → 握手成功
+    assert not c._broken and c.proc is not None
+    c.stop()
+
+
 # ---------- 协议放行（mcp_ 前缀） ----------
 
 def test_protocol_allows_mcp_prefix_tool():

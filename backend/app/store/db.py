@@ -240,16 +240,37 @@ def get_plan(run_id: str) -> sqlite3.Row | None:
 
 # ---------------- memories（M5-B3 长期记忆） ----------------
 
-def save_memory(task_id: str, run_id: str, kind: str, content: str) -> None:
-    """跨 run 长期记忆：run 结束沉淀一条经验（成功后路径 / 失败教训）。"""
+def save_memory(task_id: str, run_id: str, kind: str, content: str,
+                dedupe_kind: bool = True, max_per_task: int | None = None) -> None:
+    """跨 run 长期记忆：run 结束沉淀一条经验（成功后路径 / 失败教训）。
+
+    写入端防膨胀（与 memory.py docstring 对齐，面试可指代码）：
+    - dedupe_kind=True：同 task 同 kind 只留最新一条——先 INSERT 再删同
+      kind 旧记录（旧的下沉，防止每跑一次 done 就叠一条 success_path）
+    - max_per_task=N：该 task 总条数封顶，超出删最旧（id 最小）
+    两者同事务原子完成；读取端另有限额控注入（get_memories_for_task LIMIT）。
+    """
     if not content.strip():
         return
     with _lock, _conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO memories(task_id, run_id, kind, content, created_at)"
             " VALUES(?,?,?,?,?)",
             (task_id, run_id, kind, content.strip(), _now()),
         )
+        new_id = cur.lastrowid
+        if dedupe_kind:
+            conn.execute(
+                "DELETE FROM memories WHERE task_id=? AND kind=? AND id<>?",
+                (task_id, kind, new_id),
+            )
+        if max_per_task:
+            conn.execute(
+                "DELETE FROM memories WHERE task_id=? AND id NOT IN"
+                " (SELECT id FROM memories WHERE task_id=?"
+                "  ORDER BY id DESC LIMIT ?)",
+                (task_id, task_id, max_per_task),
+            )
 
 
 def get_memories_for_task(task_id: str, limit: int = 3) -> list[dict]:

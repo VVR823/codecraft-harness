@@ -71,6 +71,34 @@ def test_distill_skips_paused_and_empty():
                           "done") is None
 
 
+# ---------- 防膨胀（写入端去重 + 上限） ----------
+
+def test_distill_dedupes_same_kind_keeps_latest(task_id):
+    """同任务连跑两次 done → success_path 只留最新一条（旧的下沉）。"""
+    actions = [{"tool": "edit_file", "args": {"path": "utils.py",
+                                              "old": "a", "new": "b"}}]
+    memory.distill("run_1", task_id, actions, "done")
+    memory.distill("run_2", task_id, actions, "done")
+    mems = db.get_memories_for_task(task_id, limit=10)
+    sp = [m for m in mems if m["kind"] == "success_path"]
+    assert len(sp) == 1 and sp[0]["run_id"] == "run_2"
+    _cleanup(task_id)
+
+
+def test_save_memory_caps_per_task(task_id):
+    """每任务总量封顶 MAX_MEMORIES_PER_TASK：超出删最旧（多 kind 场景兜底）。"""
+    n = memory.MAX_MEMORIES_PER_TASK
+    for i in range(n + 3):
+        db.save_memory(task_id, f"r{i}", f"kind_{i}", f"内容{i}",
+                       dedupe_kind=False, max_per_task=n)
+    mems = db.get_memories_for_task(task_id, limit=100)
+    assert len(mems) == n
+    run_ids = [m["run_id"] for m in mems]
+    assert "r0" not in run_ids and "r2" not in run_ids   # 最旧 3 条被裁
+    assert f"r{n + 2}" in run_ids                        # 最新保留
+    _cleanup(task_id)
+
+
 # ---------- 检索渲染 ----------
 
 def test_render_for_goal_empty_when_no_memory(task_id):
