@@ -22,7 +22,7 @@
 
 **数字④ planner A/B：健康期 6/6 全绿（plan 不破坏 self-repair），短任务纯开销 + 放大免费限流风险 → 默认关**（glm-4.5-flash 真机背靠背补测：no-plan 3/3、plan 健康期 T1~T3 各 2 次 6/6；总 token T1 +4,665 / T2 +1,952 / T3 +3,636——**初版"T2 −953"为单次运气已证伪**；T2 稳定省 1 步（6→5）。补测失败样本全为 429 限流高压期污染，另揭示 plan 隐藏成本：token 消耗更高更易撞免费账户限流；详见 [报告](docs/planner_ab_report_2026-09-05.md) + [背靠背补测](docs/planner_backtoback_report_2026-09-05.md)）
 
-> planner = **advisory plan + agentic execution 两段式**：执行前先一次规划（~1k token）注入上下文当参考，执行仍让 LLM 每步自选工具（保住 self-repair，不引 LangGraph）。**T2（多文件侦察型）plan 反而省步省 token**——单次证据指向价值在长任务/复杂任务放大（与压缩同构）。故默认关（数字① 回归口径不动），`--plan` 按需开。
+> planner = **advisory plan + agentic execution 两段式**：执行前先一次规划（~1k token）注入上下文当参考，执行仍让 LLM 每步自选工具（保住 self-repair，不引 LangGraph）。**T2（多文件侦察型）plan 稳定省 1 步（6→5，2/2 复现）但不省 token**（背靠背 +1,952）——价值在长任务/复杂任务放大（与压缩同构），短任务规划是开销下界。故默认关（数字① 回归口径不动），`--plan` 按需开。
 
 | 任务 | 难度 | 全绿(免费) | token 中位 | 步数中位 | LLM 调用 | 耗时 |
 |---|---|---|---|---|---|---|
@@ -61,7 +61,7 @@ backend/
 │   └── trace/                 # 事件 trace 记录
 ├── tasks/                     # T1~T3 手写任务包（module + 测试 + README，git 作还原点）
 ├── scripts/                   # drive_task/run_all/run_resume_test/measure_*（实测工具）
-├── tests/                     # 36 个单元测试（含真沙箱跑任务包）
+├── tests/                     # 52 个单元测试（含真沙箱跑任务包）
 └── pytest.ini                 # 回归只收 tests/，排除任务包"考卷"
 ```
 
@@ -117,4 +117,4 @@ python -m pytest tests/ -q
 | W3 | M2：漂移识别 + 预算护栏 + 审批流 | ✅（底线 3/4 证据到手，MVP 五条全证） |
 | W4~5 | M3：压缩开关（数字③）+ 杀 N 次测恢复率（数字②） | ✅ 2026-09-04（数字② 3/3、数字③ 12.3% 压缩且绿，commit 1e144d2） |
 | W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | ✅ 2026-09-04~05（Day5 A/B + 24 步 55.5% 上界，commit 6eba0ea） |
-| W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | 🔄 进行中（B1+B2 代码 cf55aa5；B3 A/B 完成 + B6a 背靠背补测 9b151cd，数字④ 口径定稿 plan 默认关；B4 API 一致性 86b2925） |
+| W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | ✅ 2026-09-06 收官（B1~B4 + B6a 背靠背 9b151cd/d323d65 + B6b 归档 87cc0f1 + B6c 文档收官；O1-O6 精益优化 78ddfcd，单测 52/52；B5 最简 UI 未做——Q10 余力项，保持待拍板） |
