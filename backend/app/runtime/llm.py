@@ -1,10 +1,21 @@
 """LLM 薄封装（Q4/Q5 决策）。
 
 - 只做一件事：把 messages 发出去、把文本拿回来。不做规划、不做解析。
-- OpenAI 兼容端点，默认智谱 GLM-4-Flash（免费起步，Q4）。
+- OpenAI 兼容端点，默认智谱 GLM-4.5-Flash（免费，Q4）。
 - API Key 从 backend/.env 的 ZHIPU_API_KEY 读（python-dotenv），缺失时抛清晰错误。
 - 真实调用 + 测试 Fake 都走同一签名：chat(messages) -> str。
 - run_all 统计 token 用 chat_with_usage(messages) -> (str, dict)（含 prompt/completion tokens）。
+
+## 韧性层（O1，2026-09-05）
+
+免费模型（glm-4.5-flash）的真实痛点不是模型质量，是服务端限流/高压（B6a 背靠背补测暴露）：
+- **账户级限流**（智谱 code 1302，窗口可达数分钟）：6 局连跑触发后 90s 冷却都不够，退避 60/180/300s
+- **请求级 429**：秒级窗口，退避 5/10/15s
+- **空内容/坏输出**：服务端高压时偶发，短退避 2/4/8s 即时重试
+- **连续失败熔断**：连败 ≥3 次（跨调用累积）后每次失败硬冷却 300s，避免账户高压时反复撞
+- **请求限速**：公开调用最小间隔 1.5s，从源头降低 RPM 峰值（6 局连跑把账户打满的教训）
+
+成功一次清零连败计数。单次调用韧性在 llm 层，整局重试（git restore 重跑）留在脚本层。
 """
 from __future__ import annotations
 
@@ -17,6 +28,48 @@ from dotenv import load_dotenv
 from ..config import BASE_DIR, LLM_BASE_URL, LLM_MODEL
 
 load_dotenv(BASE_DIR / ".env")
+
+# ---- 韧性层参数 ----
+MIN_CALL_INTERVAL = 1.5    # 公开调用最小间隔（秒）：防突发密集请求触发限流
+CIRCUIT_BREAK_AFTER = 3    # 连续失败 ≥N 次（跨调用累积）触发熔断
+CIRCUIT_COOLDOWN = 300     # 熔断硬冷却（秒）
+
+_fail_streak = 0           # 连续失败计数（跨公开调用累积，成功清零）
+_last_call_ts = 0.0        # 上次公开调用时间戳（限速用）
+
+
+def _throttle():
+    """请求限速：距上次公开调用不足 MIN_CALL_INTERVAL 则 sleep 补齐。"""
+    global _last_call_ts
+    now = time.monotonic()
+    gap = MIN_CALL_INTERVAL - (now - _last_call_ts)
+    if gap > 0:
+        time.sleep(gap)
+    _last_call_ts = time.monotonic()
+
+
+def _error_kind(e: Exception) -> str:
+    """错误分级：account(账户级1302) | rate(请求级429) | empty(空内容) | other。"""
+    s = str(e)
+    if "1302" in s or "账户已达到速率限制" in s:
+        return "account"
+    if "429" in s or "RateLimit" in type(e).__name__ or "速率限制" in s:
+        return "rate"
+    if "空内容" in s:
+        return "empty"
+    return "other"
+
+
+def _backoff(kind: str, attempt: int) -> float:
+    """分级退避（秒）。attempt 从 0 起，超出序列取末位。"""
+    table = {
+        "account": (60, 180, 300),   # 账户级：窗口分钟级，长等
+        "rate":    (5, 10, 15),      # 请求级：秒级窗口
+        "empty":   (2, 4, 8),        # 高压空内容：短退避即时重试
+        "other":   (1, 2, 4),        # 网络等：普通退避
+    }
+    seq = table[kind]
+    return seq[min(attempt, len(seq) - 1)]
 
 
 def _client():
@@ -53,20 +106,31 @@ def _call_once(client, model: str, messages: list[dict],
 
 def _chat_with_retry(model: str, messages: list[dict],
                      temperature: float, max_retries: int) -> tuple[str, dict]:
-    """带本地重试循环的调用。注：openai 旧版客户端无 max_retries 参数，故手动重试。"""
+    """带韧性层的调用：限速 → 尝试 → 分级退避 → 熔断。
+
+    openai 旧版客户端无 max_retries 参数，故手动重试。失败按 _error_kind 分级退避；
+    连续失败跨调用累积（_fail_streak），≥CIRCUIT_BREAK_AFTER 后熔断硬冷却。
+    """
+    global _fail_streak
+    _throttle()
     client = _client()
     last_err: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
-            return _call_once(client, model, messages, temperature)
+            text, usage = _call_once(client, model, messages, temperature)
+            _fail_streak = 0  # 成功清零连败计数
+            return text, usage
         except Exception as e:  # noqa: BLE001 - 网络/限流/解析统一重试
             last_err = e
+            _fail_streak += 1
             if attempt < max_retries:
-                # 429 限流（免费模型常见）：退避拉长到 5s/10s/15s，等限流窗口过去
-                if "429" in str(e) or "速率限制" in str(e) or "RateLimit" in type(e).__name__:
-                    time.sleep(5.0 * (attempt + 1))
-                else:
-                    time.sleep(1.0 * (attempt + 1))  # 普通退避：1s, 2s
+                kind = _error_kind(e)
+                delay = _backoff(kind, attempt)
+                if _fail_streak >= CIRCUIT_BREAK_AFTER:
+                    delay = max(delay, CIRCUIT_COOLDOWN)
+                    print(f"    ⚠️ LLM 连续失败 {_fail_streak} 次，熔断冷却 {CIRCUIT_COOLDOWN}s…",
+                          flush=True)
+                time.sleep(delay)
     raise RuntimeError(f"LLM 调用失败（重试 {max_retries} 次后）: {last_err}")
 
 

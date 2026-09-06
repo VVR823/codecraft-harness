@@ -193,6 +193,8 @@ def main():
           f"{' | planner=开' if args.plan else ' | planner=关(回归口径)'}")
     print("=" * 70)
     rows = []
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
     for task in tasks:
         for i in range(args.repeat):
             print(f"> {task} 第{i+1}/{args.repeat} 次…", flush=True)
@@ -202,16 +204,15 @@ def main():
             print(f"  -> {r['status']} | 全绿={r['green']} | "
                   f"steps={r['steps']} | token={r['tokens']} | "
                   f"重试={r.get('retried', 0)} | 原因={r['reason'][:60]}")
+            # 即时落盘（O2）：每局重写报告，崩了/中断不丢已跑局
+            (REPORT_DIR / f"run_all_report_{stamp}.md").write_text(
+                fmt_md_table(rows, model, args.repeat), encoding="utf-8")
+            (REPORT_DIR / f"run_all_{stamp}.json").write_text(
+                json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
 
     md = fmt_md_table(rows, model, args.repeat)
     print("\n" + "=" * 70)
     print(md)
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    (REPORT_DIR / f"run_all_report_{stamp}.md").write_text(md, encoding="utf-8")
-    (REPORT_DIR / f"run_all_{stamp}.json").write_text(
-        json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n报告已存: data/run_all_report_{stamp}.md (+.json)")
 
     # 总判定
     greens = sum(1 for r in rows if r["green"])

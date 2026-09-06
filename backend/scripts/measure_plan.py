@@ -8,11 +8,12 @@
 - 耗时
 
 用法（backend/ 下）：
-    python scripts/measure_plan.py --tasks t1_single_fix,t2_missing_fn  # 每任务双档各一次
-    python scripts/measure_plan.py --task t2_missing_fn --no-plan       # 只跑对照档
-    python scripts/measure_plan.py --task t2_missing_fn --plan          # 只跑规划档
+    python scripts/measure_plan.py --tasks t1_single_fix,t2_missing_fn        # 每任务双档各一次
+    python scripts/measure_plan.py --task t2_missing_fn --no-plan            # 只跑对照档
+    python scripts/measure_plan.py --task t2_missing_fn --plan --repeat 3    # 规划档跑 3 次取中位
 """
 import argparse
+import statistics
 import subprocess
 import sys
 import time
@@ -109,11 +110,73 @@ def run_one(task: str, model: str, use_plan: bool, max_retry: int = 2) -> dict:
             "duration_s": 0, "run_id": "", "error": "LLM 故障重试耗尽"}
 
 
+# ---------- 多样本统计与即时落盘（O2/O3）----------
+
+def _med(xs: list) -> float:
+    return statistics.median(xs) if xs else 0
+
+
+def _fmt(r: dict) -> str:
+    return (f"| {r['task']} | {'plan' if r['plan'] else 'no-plan'} | "
+            f"{'✅' if r['green'] else '❌'} | {r['steps']} | {r['calls']} | {r['tokens']} "
+            f"| {r['planning_tokens']} | {r.get('status', r.get('error', ''))} "
+            f"| {r['duration_s']} | {r['run_id'][:8]} |")
+
+
+def _render(rows: list[dict], model: str, task_hint: str) -> str:
+    """把当前全部样本渲染成 md（明细表 + 按任务/档分组的中位小结）。"""
+    lines = [f"# planner A/B 实测（{time.strftime('%Y-%m-%d %H:%M')} | model={model}"
+             + (f" | {task_hint}" if task_hint else "") + "）", "",
+             "| 任务 | 档 | 全绿 | 步数 | LLM调用 | 总token | 规划token | 状态 | 耗时(s) | run_id |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
+    for r in rows:
+        lines.append(_fmt(r))
+    lines.append("")
+    lines.append("## 小结（同档多样本取中位，样本数见括号）")
+    # 按 (任务, 档) 分组
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        groups.setdefault((r["task"], r["plan"]), []).append(r)
+    for task in sorted({k[0] for k in groups}):
+        base_rs = groups.get((task, False), [])
+        plan_rs = groups.get((task, True), [])
+        parts = []
+        for label, rs in (("no-plan", base_rs), ("plan", plan_rs)):
+            if not rs:
+                continue
+            green_n = sum(1 for x in rs if x["green"])
+            parts.append(f"{label} ×{len(rs)}: 绿 {green_n}/{len(rs)} | "
+                         f"步数中位 {_med([x['steps'] for x in rs])} | "
+                         f"token中位 {_med([x['tokens'] for x in rs]):.0f}")
+        line = f"- **{task}**: " + " → ".join(parts)
+        if base_rs and plan_rs:
+            d_tok = _med([x["tokens"] for x in plan_rs]) - _med([x["tokens"] for x in base_rs])
+            line += f" | Δtoken {'+' if d_tok >= 0 else ''}{d_tok:.0f}"
+            d_step = _med([x["steps"] for x in plan_rs]) - _med([x["steps"] for x in base_rs])
+            line += f" | Δ步数 {'+' if d_step >= 0 else ''}{d_step:.0f}"
+        lines.append(line)
+    all_green = all(r["green"] for r in rows) and bool(rows)
+    lines.append("")
+    lines.append(f"**全部全绿: {'✅' if all_green else '❌'}**"
+                 f"{'——plan 不破坏 self-repair（数字④前提成立）' if all_green else '——有档未绿，看明细'}")
+    return "\n".join(lines)
+
+
+def _save(rows: list[dict], model: str, stamp: str, task_hint: str = "") -> Path:
+    """即时落盘：把当前进度写盘（每局后调用，崩了不丢已跑局）。返回文件路径。"""
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    path = REPORT_DIR / f"measure_plan_{stamp}.md"
+    path.write_text(_render(rows, model, task_hint), encoding="utf-8")
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default=None, help="单个任务（与 --tasks 二选一）")
     ap.add_argument("--tasks", default=None, help="逗号分隔任务列表（默认全 T1~T3）")
     ap.add_argument("--model", default="glm-4.5-flash")
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="每档重复次数（多样本取中位，防单次样本运气；默认 1）")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--plan", action="store_true", help="只跑规划档")
     mode.add_argument("--no-plan", dest="noplan", action="store_true", help="只跑对照档")
@@ -130,66 +193,40 @@ def main():
     if not (want_plan or want_noplan):
         sys.exit("--plan 与 --no-plan 不能同时给")
 
-    print(f"measure_plan: tasks={tasks} | model={args.model} | "
+    print(f"measure_plan: tasks={tasks} | model={args.model} | repeat={args.repeat} | "
           f"{'规划档+对照档' if (want_plan and want_noplan) else ('只规划档' if want_plan else '只对照档')}")
     print("=" * 78)
-    rows = []
+    rows: list[dict] = []
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    report = None
     for task in tasks:
         print(f">>> {task}", flush=True)
-        if want_noplan:
-            rows.append(run_one(task, args.model, use_plan=False))
-            r = rows[-1]
-            print(f"  [对照 no-plan] run={r['run_id'][:8]} | green={r['green']} | steps={r['steps']} "
-                  f"| calls={r['calls']} | tokens={r['tokens']} | status={r.get('status','')}", flush=True)
-        if want_plan:
-            rows.append(run_one(task, args.model, use_plan=True))
-            r = rows[-1]
-            print(f"  [规划 plan]    run={r['run_id'][:8]} | green={r['green']} | steps={r['steps']} "
-                  f"| calls={r['calls']} | tokens={r['tokens']} (+规划{r['planning_tokens']})"
-                  f" | status={r.get('status','')}", flush=True)
+        for rep in range(args.repeat):
+            label = f"（第{rep + 1}/{args.repeat}次）" if args.repeat > 1 else ""
+            if want_noplan:
+                print(f"  [{task} 对照 no-plan{label}]", flush=True)
+                rows.append(run_one(task, args.model, use_plan=False))
+                r = rows[-1]
+                print(f"    run={r['run_id'][:8]} | green={r['green']} | steps={r['steps']} "
+                      f"| calls={r['calls']} | tokens={r['tokens']} | status={r.get('status', '')}",
+                      flush=True)
+                report = _save(rows, args.model, stamp)  # 即时落盘：崩了不丢已跑局
+            if want_plan:
+                print(f"  [{task} 规划 plan{label}]", flush=True)
+                rows.append(run_one(task, args.model, use_plan=True))
+                r = rows[-1]
+                print(f"    run={r['run_id'][:8]} | green={r['green']} | steps={r['steps']} "
+                      f"| calls={r['calls']} | tokens={r['tokens']} (+规划{r['planning_tokens']})"
+                      f" | status={r.get('status', '')}", flush=True)
+                report = _save(rows, args.model, stamp)  # 即时落盘
 
     print("\n" + "=" * 78)
-    lines = [f"# planner A/B 实测（{time.strftime('%Y-%m-%d %H:%M')} | model={args.model}）", "",
-             "| 任务 | 档 | 全绿 | 步数 | LLM调用 | 总token | 规划token | 状态 | 耗时(s) | run_id |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
-    for r in rows:
-        lines.append(
-            f"| {r['task']} | {'plan' if r['plan'] else 'no-plan'} | "
-            f"{'✅' if r['green'] else '❌'} | {r['steps']} | {r['calls']} | {r['tokens']} "
-            f"| {r['planning_tokens']} | {r.get('status', r.get('error', ''))} | {r['duration_s']} | {r['run_id'][:8]} |")
-    lines.append("")
-    # 按任务做 plan vs no-plan 小结
-    lines.append("## 小结")
-    by_task: dict[str, list[dict]] = {}
-    for r in rows:
-        by_task.setdefault(r["task"], []).append(r)
-    for task, rs in by_task.items():
-        base = next((x for x in rs if not x["plan"]), None)
-        plan = next((x for x in rs if x["plan"]), None)
-        if base and plan:
-            d_tok = plan["tokens"] - base["tokens"]
-            d_step = plan["steps"] - base["steps"]
-            both_green = base["green"] and plan["green"]
-            lines.append(
-                f"- **{task}**: tokens {base['tokens']} → {plan['tokens']} "
-                f"({'+' if d_tok >= 0 else ''}{d_tok}, 其中规划 {plan['planning_tokens']}) | "
-                f"步数 {base['steps']} → {plan['steps']} ({'+' if d_step >= 0 else ''}{d_step}) | "
-                f"两档全绿={'✅' if both_green else '❌'}")
-        else:
-            lines.append(f"- **{task}**: 只有 {'plan' if (plan or not base) else 'no-plan'} 档")
-    all_green = all(r["green"] for r in rows)
-    lines.append("")
-    lines.append(f"**全部全绿: {'✅' if all_green else '❌'}**"
-                 f"{'——plan 不破坏 self-repair（数字④前提成立）' if all_green else '——有档未绿，看明细'}")
-
-    md = "\n".join(lines)
+    md = _render(rows, args.model, "")
     print(md)
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    path = REPORT_DIR / f"measure_plan_{stamp}.md"
-    path.write_text(md, encoding="utf-8")
-    print(f"\n报告已存: {path}")
-    return 0 if all_green else 1
+    if report is None:
+        report = _save(rows, args.model, stamp)
+    print(f"\n报告已存: {report}")
+    return 0 if all(r["green"] for r in rows) and rows else 1
 
 
 if __name__ == "__main__":

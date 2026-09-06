@@ -50,6 +50,16 @@ SYSTEM_PROMPT = _SYSTEM_HEAD + "\n可用工具（注册表生成，与执行校�
 # 工具结果截断上限（防上下文爆炸的 v0 防线，正式分层压缩在 context.py）
 TOOL_OUTPUT_CAP = 3000
 
+# ---- O4 空转雷达（2026-09-05）----
+# 免费模型在长上下文/高压下会"原地打转"：连续只 read_file 不写不测（B6a 补测实证：
+# T2 plan 档 step1~5 全读 test_module.py，空转 35k token 才被预算护栏截停）。
+# 雷达 = 连续 STALL_LIMIT 个动作全是零进展工具 → 触发。纯观测默认开（只记 trace + 日志，
+# 不改执行流 → 数字① 口径零影响）；stall_warning=True 时才把提醒注入上下文（长任务按需开）。
+STALL_LIMIT = 3                              # 连续多少个零进展动作判空转
+PROGRESS_TOOLS = ("edit_file", "write_file", "run_tests")  # 能推进/验证任务的工具
+STALL_MSG = ("（系统提醒）你已连续 {n} 步只做侦察（{tools}）没有写文件或跑测试。"
+             "如果已掌握足够信息，请直接 edit_file 修改目标文件或 run_tests 验证，别再只读。")
+
 
 class LoopError(Exception):
     pass
@@ -78,7 +88,8 @@ class HarnessLoop:
                  token_budget: int | None = None, meter: dict | None = None,
                  context_compress: bool = False,
                  keep_recent_steps: int = 3,
-                 use_plan: bool = False):
+                 use_plan: bool = False,
+                 stall_warning: bool = False):
         """token_budget: 单 run token 上限（None=不启用护栏，默认无护栏）。
         meter: 外部共享的 token 计量 dict（decider 包装层累加 meter["tokens"]，
         loop 只读判断是否超限）——计量与决策解耦，任何 decider 都能挂护栏。
@@ -86,12 +97,15 @@ class HarnessLoop:
         decider 视图，self.messages 仍全量存档（checkpoint/resume 不丢信息）。
         use_plan: M4 planner 开关——开=进入执行前先调一次 planner（同一 decider
         通道），计划注入初始 user 消息随 checkpoint 持久化；resume 不重规划。
+        stall_warning: O4 空转雷达的主动提醒开关——默认 False（雷达纯观测：trace+
+        日志，不改执行流）；True=空转时把提醒注入上下文（长任务按需开）。
         """
         self.workspace = Path(task_dir)
         if not self.workspace.is_dir():
             raise LoopError(f"任务目录不存在: {self.workspace}")
         self.goal = goal
         self.decider = decider
+        self.stall_warning = stall_warning
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self.task_id = task_id or self.workspace.name
         self.token_budget = token_budget
@@ -109,6 +123,8 @@ class HarnessLoop:
         self._prev_action: dict | None = None
         # 预算护栏：人工批准续跑后置 True，本轮不再因超限暂停（"人已放行"语义）
         self._budget_approved = False
+        # O4 空转雷达：同一段空转只提醒一次（出现进展动作后重置）
+        self._stall_armed = False
 
     def _rebuild_verification_state(self) -> None:
         """从 trace 重建写/测步号（resume 续跑时用），verdict==ok 即全绿。"""
@@ -272,6 +288,7 @@ class HarnessLoop:
                     self.messages.append({"role": "user", "content": deny})
                     continue
                 self._execute(act, step)
+                self._stall_radar()   # O4：连续零进展动作 → trace/日志（可选提醒）
                 self._checkpoint(step)
             db.update_run_status(self.run_id, "paused")
             return self._summary("paused", steps=step)
@@ -385,8 +402,7 @@ class HarnessLoop:
 
         db.append_trace(self.run_id, step, tool,
                         json.dumps(args, ensure_ascii=False)[:500],
-                        _truncate(output), 0, verdict)
-        # 工具结果摘要进入上下文（v0 直拼；正式分层压缩在 context.py）
+                        _truncate(output), 0, verdict)        # 工具结果摘要进入上下文（v0 直拼；正式分层压缩在 context.py）
         self.messages.append({"role": "assistant",
                               "content": f"调用 {tool} {json.dumps(args, ensure_ascii=False)}"})
         self.messages.append({"role": "user",
@@ -396,6 +412,31 @@ class HarnessLoop:
         # 记录上一步成功动作（重复动作护栏用；handler 失败时不上记录→模型可重试同动作）
         self._prev_action = {"tool": tool, "args": args}
         return {"tool": tool, "output": output}
+
+    # ---------- O4 空转雷达 ----------
+    def _stall_radar(self) -> None:
+        """连续 STALL_LIMIT 个动作全是零进展（无 edit/write/test）→ 判空转。
+
+        纯观测（默认）：只记 trace（verdict=stall）+ 打日志，不改执行流、不碰 messages
+        ——数字①/②/③ 口径零影响。stall_warning=True 时把提醒注入上下文拉模型回正轨。
+        同一段空转只提醒一次：出现进展动作（_stall_armed 复位）后才可能再触发。
+        """
+        if len(self.done_actions) < STALL_LIMIT:
+            return
+        recent = self.done_actions[-STALL_LIMIT:]
+        if any(a["tool"] in PROGRESS_TOOLS for a in recent):
+            self._stall_armed = False  # 有进展 → 复位，允许下次空转再提醒
+            return
+        if self._stall_armed:
+            return  # 同一段空转已提醒过，别刷屏
+        self._stall_armed = True
+        tools = ", ".join(a["tool"] for a in recent)
+        msg = STALL_MSG.format(n=STALL_LIMIT, tools=tools)
+        db.append_trace(self.run_id, len(self.done_actions), "", "",
+                        _truncate(f"stall_warning: {msg}", 300), 0, "stall")
+        print(f"[空转雷达] 连续 {STALL_LIMIT} 步零进展（{tools}）→ 已记录", flush=True)
+        if self.stall_warning:
+            self.messages.append({"role": "user", "content": msg})
 
     # ---------- 存档 ----------
     def _checkpoint(self, step: int) -> None:

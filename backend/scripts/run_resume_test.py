@@ -13,8 +13,10 @@ resume 进程退出码语义（drive_resume_probe.py）：
     python scripts/run_resume_test.py [--task t1_single_fix] [--kill-points 3,4] [--retries 2]
 """
 import argparse
+import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -23,6 +25,7 @@ PY = sys.executable
 SCRIPTS = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS.parent.parent
 PROBE = SCRIPTS / "drive_resume_probe.py"
+REPORT_DIR = SCRIPTS.parent / "data"
 
 # probe resume 退出码常量（与 drive_resume_probe.py 保持同步）
 RC_GREEN = 0
@@ -48,6 +51,13 @@ def _diagnose(tag: str, p: subprocess.CompletedProcess) -> None:
         print("   stdout |", l)
 
 
+def _log_result(jsonl: Path, rec: dict) -> None:
+    """每试次即时落盘一行（O2：崩了不丢已跑试次）。"""
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    with jsonl.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="t1_single_fix")
@@ -58,6 +68,9 @@ def main():
                     help="LLM 偶发失败（码3）的自愈重试次数，默认 2（与 run_all 同口径）")
     args = ap.parse_args()
     kill_points = [int(x) for x in args.kill_points.split(",") if x.strip()]
+
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    jsonl = REPORT_DIR / f"run_resume_test_{stamp}.jsonl"
 
     print(f"run_resume_test 开始：task={args.task} | 杀点={kill_points} | "
           f"model={args.model} | LLM自愈重试={args.retries}")
@@ -72,18 +85,30 @@ def main():
                         f"backend/tasks/{args.task}"], check=True)
         print(f"\n>>> 试次：杀点 = 第 {kp} 次决策前（应已完成 {kp-1} 步）…")
 
-        # 1) fresh 跑一段 → 中途自杀
-        p1 = _run_child(["--task", args.task, "--model", args.model,
-                         "--kill-before", str(kp)])
+        # 1) fresh 跑一段 → 中途自杀（LLM 偶发码 3 自愈重试，与阶段2同口径）
+        p1 = None
+        for attempt in range(args.retries + 1):
+            p1 = _run_child(["--task", args.task, "--model", args.model,
+                             "--kill-before", str(kp)])
+            if p1.returncode == RC_LLM_FAIL and attempt < args.retries:
+                print(f"  ⚠️ fresh 阶段 LLM 偶发异常，清场后自愈重试 {attempt + 1}/{args.retries}…")
+                subprocess.run(["git", "-C", str(REPO_ROOT), "restore", "--",
+                                f"backend/tasks/{args.task}"], check=True)
+                subprocess.run(["git", "-C", str(REPO_ROOT), "clean", "-fd", "--",
+                                f"backend/tasks/{args.task}"], check=True)
+                continue
+            break
         run_id = ""
-        for line in p1.stdout.splitlines():
+        for line in (p1.stdout if p1 else "").splitlines():
             if line.startswith("RUN_ID="):
                 run_id = line.split("=", 1)[1].strip()
-        killed = p1.returncode == 137
-        print(f"  阶段1 退出码={p1.returncode} | 被 kill: {killed} | run_id={run_id[:8] if run_id else '?'}")
+        killed = p1 is not None and p1.returncode == 137
+        print(f"  阶段1 退出码={p1.returncode if p1 else '?'} | 被 kill: {killed} | run_id={run_id[:8] if run_id else '?'}")
         if not (killed and run_id):
             print("  ❌ 阶段1未按预期被杀，跳过该试次")
-            _diagnose("阶段1", p1)
+            _diagnose("阶段1", p1) if p1 is not None else None
+            _log_result(jsonl, {"kp": kp, "ok": False, "reason": "阶段1未按预期被杀",
+                                "rc1": p1.returncode if p1 else None, "run_id": run_id[:8]})
             continue
 
         # 2) resume 续跑 → 全绿（LLM 偶发码 3 自愈重试，机制码 2 直接 FAIL）
@@ -112,9 +137,14 @@ def main():
                   "LLM自愈重试后仍失败" if p2 and p2.returncode == RC_LLM_FAIL else
                   "resume 正常但未全绿" if p2 and p2.returncode == RC_NOT_GREEN else "")
         print(f"  该试次恢复至绿: {'✅ PASS' if ok else f'❌ FAIL（{reason}）'}")
+        _log_result(jsonl, {"kp": kp, "ok": ok, "reason": reason or "PASS",
+                            "rc1": p1.returncode, "killed": killed,
+                            "rc2": p2.returncode if p2 else None,
+                            "no_replay": no_replay, "run_id": run_id[:8]})
 
     print("\n" + "=" * 70)
     print(f"汇总: 恢复率 {passed}/{len(kill_points)}")
+    print(f"逐试次明细已存: {jsonl}")
     if len(kill_points) and passed == len(kill_points):
         print(f"🎉 resume 恢复率 100%（杀 {len(kill_points)} 次全部续跑至全绿，且不重放）")
     return 0 if passed == len(kill_points) else 1

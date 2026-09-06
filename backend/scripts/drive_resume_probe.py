@@ -87,7 +87,13 @@ def main():
     decider = KillSwitchDecider(chat, args.kill_before)
     loop = HarnessLoop(task_dir, goal, decider=decider)
     print(f"RUN_ID={loop.run_id}", flush=True)
-    result = loop.run()
+    try:
+        result = loop.run()
+    except Exception as e:  # noqa: BLE001 - LLM 网络/限流等偶发（llm 层重试耗尽后冒泡）
+        # 偶发失败：返回码 3 供父进程自愈重试；还原 bug 态保证重试起点干净
+        print(f"[LLM-FAIL] fresh 途中偶发异常: {type(e).__name__}: {e}", flush=True)
+        _restore(args.task)
+        return 3
     tests = [a for a in result["actions"] if a["tool"] == "run_tests"]
     green = result["status"] == "done" and tests and "全绿" in tests[-1]["result_tail"]
     print(f"[fresh] status={result['status']} | steps={result['steps']} | 全绿={green}")
