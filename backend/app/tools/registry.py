@@ -91,12 +91,27 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
                           "往回读，或先确认你要找的内容在哪个区间。")
 
     if limit > 0:
-        end = min(offset + limit - 1, total)
-        seg = "\n".join(lines[offset - 1: offset - 1 + limit])
+        req_end = min(offset + limit - 1, total)
+        rows = lines[offset - 1: req_end]
+        # 页面超长自动收缩：只返回"完整行"，绝不拦腰截断（T4 run10 实证：1500 行源码
+        # 每页 100 行 ≈6500 字符 > 6000 字符上限，旧实现把页尾 ~25 行砍成残行——模型
+        # 看到"[截断 N 字符]"以为漏内容，反复折返重读同一 offset、乱序跳读漏行）。
+        while len(rows) > 1:
+            budget = READ_FILE_CAP - (len(f"[行 {offset}-{offset + len(rows) - 1} / 共 {total} 行]") + 1)
+            if sum(len(r) + 1 for r in rows) <= budget:
+                break
+            rows = rows[:-1]  # 从页尾逐行裁，直到整页能完整放进单次上限
+        seg = "\n".join(rows)
+        end = offset + len(rows) - 1
         header = f"[行 {offset}-{end} / 共 {total} 行]"
         if end >= total:
             header += "（已到文件末尾）"
-        return ToolResult(_truncate(header + "\n" + seg, READ_FILE_CAP))
+        out = header + "\n" + seg
+        if end < req_end:
+            out += (f"\n（注：请求的 {limit} 行超出单次上限 {READ_FILE_CAP} 字符，"
+                    f"已自动收缩到行 {offset}-{end}（完整行，无截断）。"
+                    f"继续请用 offset={end + 1}；只需一小段就减小 limit）")
+        return ToolResult(out)
 
     # 全文（自动截断防上下文爆炸）
     if len(content) <= READ_FILE_CAP:

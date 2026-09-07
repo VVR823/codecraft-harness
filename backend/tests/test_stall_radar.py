@@ -289,3 +289,73 @@ def test_read_result_message_not_double_truncated(tmp_path):
     msg = loop.messages[-1]["content"]
     assert "line0089" in msg    # 文件尾部内容可见（未被砍）
     assert "截断" not in msg     # 消息层没有二次截断标记
+
+
+# ---------- 分页自动收缩（T4 run10 实证：页尾拦腰截断 → 模型折返重读/乱序跳读） ----------
+
+def test_page_read_auto_shrinks_long_pages(tmp_path):
+    """请求 100 行但超 6000 字符 → 只返回放得下的完整行 + 明确的下页 offset，不拦腰截断。"""
+    from app.tools import registry
+    body = "\n".join(f"longline{i:04d} " + "x" * 90 for i in range(1, 101))  # 100 行 × ~100 字符 ≈ 10KB
+    (tmp_path / "big.py").write_text(body, encoding="utf-8")
+    r = registry._read_file(tmp_path, {"path": "big.py", "offset": 1, "limit": 100})
+    assert r.ok
+    out = r.output
+    assert "已自动收缩" in out                      # 有收缩说明
+    assert "offset=" in out                         # 给了下页起点
+    assert "行 1-" in out and "共 100 行" in out
+    # 输出里不该有旧式拦腰截断标记；页尾是完整行
+    assert "\n...[截断" not in out
+    assert out.rstrip().endswith("longline" + "x" * 90) or "（注" in out
+    # 收缩后的行数与说明一致：页尾完整行 = 该页最后一行本身
+    shown_end = int(out.split("[行 1-")[1].split(" ")[0])
+    assert 1 <= shown_end < 100
+    assert f"longline{shown_end:04d} " in out       # 显示的最后一整行内容在
+    assert f"longline{shown_end + 1:04d}" not in out  # 未显示的下一行不在（无残行）
+
+
+def test_page_read_small_pages_unchanged(tmp_path):
+    """小页不受影响：无收缩说明，行为与旧实现一致。"""
+    from app.tools import registry
+    body = "\n".join(f"line{i}" for i in range(1, 601))
+    (tmp_path / "big.py").write_text(body, encoding="utf-8")
+    r = registry._read_file(tmp_path, {"path": "big.py", "offset": 1, "limit": 100})
+    assert r.ok and "[行 1-100" in r.output and "已自动收缩" not in r.output
+    # 末尾锚点语义保留
+    r = registry._read_file(tmp_path, {"path": "big.py", "offset": 598, "limit": 100})
+    assert r.ok and "已到文件末尾" in r.output and "共 600 行" in r.output
+
+
+# ---------- 分页自动收缩（T4 run10 实证：页尾拦腰截断 → 模型折返重读/乱序跳读） ----------
+
+def test_page_read_auto_shrinks_long_pages(tmp_path):
+    """请求 100 行但超 6000 字符 → 只返回放得下的完整行 + 明确的下页 offset，不拦腰截断。"""
+    from app.tools import registry
+    body = "\n".join(f"longline{i:04d} " + "x" * 90 for i in range(1, 101))  # 100 行 × ~100 字符 ≈ 10KB
+    (tmp_path / "big.py").write_text(body, encoding="utf-8")
+    r = registry._read_file(tmp_path, {"path": "big.py", "offset": 1, "limit": 100})
+    assert r.ok
+    out = r.output
+    assert "已自动收缩" in out                      # 有收缩说明
+    assert "offset=" in out                         # 给了下页起点
+    assert "行 1-" in out and "共 100 行" in out
+    # 输出里不该有旧式拦腰截断标记；页尾是完整行
+    assert "\n...[截断" not in out
+    assert out.rstrip().endswith("longline" + "x" * 90) or "（注" in out
+    # 收缩后的行数与说明一致：页尾完整行 = 该页最后一行本身
+    shown_end = int(out.split("[行 1-")[1].split(" ")[0])
+    assert 1 <= shown_end < 100
+    assert f"longline{shown_end:04d} " in out       # 显示的最后一整行内容在
+    assert f"longline{shown_end + 1:04d}" not in out  # 未显示的下一行不在（无残行）
+
+
+def test_page_read_small_pages_unchanged(tmp_path):
+    """小页不受影响：无收缩说明，行为与旧实现一致。"""
+    from app.tools import registry
+    body = "\n".join(f"line{i}" for i in range(1, 601))
+    (tmp_path / "big.py").write_text(body, encoding="utf-8")
+    r = registry._read_file(tmp_path, {"path": "big.py", "offset": 1, "limit": 100})
+    assert r.ok and "[行 1-100" in r.output and "已自动收缩" not in r.output
+    # 末尾锚点语义保留
+    r = registry._read_file(tmp_path, {"path": "big.py", "offset": 598, "limit": 100})
+    assert r.ok and "已到文件末尾" in r.output and "共 600 行" in r.output
