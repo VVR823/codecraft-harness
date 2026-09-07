@@ -5,6 +5,9 @@
     python scripts/drive_task.py t3_cross_file
     python scripts/drive_task.py t1_single_fix --skills --mcp --memory   # M5 能力全开
 跑完 git restore 还原任务包（保持"带 bug 考卷"态）。
+
+决策退化自动续跑：run 因连续坏 JSON failed（解析/校验类）且模型没写文件时，
+自动从最后 checkpoint 续跑换采样重试 ≤AUTO_RESUME_LIMIT 次（T4 run7/11 实证）。
 """
 import argparse
 import subprocess
@@ -21,6 +24,24 @@ TASKS = Path(__file__).resolve().parent.parent / "tasks"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # M5 Skills 仓库（示例技能；`--skills` 时按 goal 语义匹配注入）
+
+# 决策退化自动续跑（T4 run7/11 实证，2026-09-07）：免费模型在长 run 上偶发
+# 连续输出坏 JSON（4 连败整局 failed），run7 死在通读后、run11 死在已摸到
+# escaped_cells 代码、下一步就能 edit 的节骨眼。步内重试（Q11，喂回错误重出）
+# 救不了陷入沟槽的模型；run 级重试 = 从最后 checkpoint 续跑换采样（新 JSON）。
+# 仅当失败原因是决策解析/校验类、且续跑不触发 ws_hash 漂移（模型没写文件）时
+# 才自动续跑，限 AUTO_RESUME_LIMIT 次防死循环。
+AUTO_RESUME_LIMIT = 2
+_DEGRADE_MARKERS = ("字段校验失败", "JSON 解析失败", "模型输出为空", "找不到 JSON",
+                    "JSON 不是对象")
+
+
+def _is_degraded_failure(result: dict) -> bool:
+    """决策退化失败：status=failed 且 reason 是解析/校验类（非工作区漂移等）。"""
+    if result.get("status") != "failed":
+        return False
+    reason = result.get("reason") or ""
+    return any(m in reason for m in _DEGRADE_MARKERS)
 
 
 def main():
@@ -60,8 +81,19 @@ def main():
           f" | skills={args.skills} mcp={args.mcp} memory={args.memory}")
     print("=" * 60)
     result = loop.run()
+    auto = 0
+    while _is_degraded_failure(result) and auto < AUTO_RESUME_LIMIT:
+        auto += 1
+        print(f"\n[auto-resume {auto}/{AUTO_RESUME_LIMIT}] 决策退化"
+              f"（{(result.get('reason') or '')[:80]}）→ 从 checkpoint 续跑换采样重试")
+        try:
+            result = loop.resume()
+        except Exception as e:  # noqa: BLE001 - ws 漂移等续跑被拒：保持失败结果
+            print(f"[auto-resume] 续跑被拒（{str(e)[:100]}）→ 保持原失败结果")
+            break
     print("=" * 60)
-    print(f"status: {result['status']} | steps: {result['steps']}")
+    print(f"status: {result['status']} | steps: {result['steps']}"
+          + (f" | auto-resume: {auto}" if auto else ""))
     if result.get("reason"):
         print("reason:", result["reason"])
 
