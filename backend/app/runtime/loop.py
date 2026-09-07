@@ -378,9 +378,14 @@ class HarnessLoop:
         return None
 
     def _run_loop(self, start_step: int) -> dict:
+        # 步数是"段"语义而非整 run 绝对上限：每段（run()/每次 resume()）最多
+        # MAX_STEPS 步。真实库任务（T4）探索开销大，一段跑不完 → paused 后可
+        # resume 续跑新的一段（T4 run12 实证：30 步触顶时已摸到 pipe 格式定义，
+        # 旧绝对语义下 resume 立即再 paused，一步都续不了）。
+        segment_end = start_step + MAX_STEPS - 1
         step = start_step - 1
         try:
-            while step < MAX_STEPS:
+            while step < segment_end:
                 # 预算护栏（底线4）：meter 累计超限 → 暂停等人工批准（记审批请求）
                 if self._over_budget():
                     approval.request_budget_continue(
