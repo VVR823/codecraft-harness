@@ -142,39 +142,6 @@ def test_dup_read_diff_file_allowed(tmp_path):
     assert loop._dup_action_block(act) == ""
 
 
-# ---------- read_file 重复拦截（T4 大文件死循环实证补的防复发） ----------
-
-def test_dup_read_same_range_blocked(tmp_path):
-    """连续两次 read_file 同一文件同一区间 → 拦截并给转向提示。"""
-    loop = _mk_loop(tmp_path)
-    step = {"thought": "再读一次", "tool": "read_file",
-            "args": {"path": "big.py", "offset": 590, "limit": 15}, "done": False}
-    from app.runtime.protocol import AgentStep
-    act = AgentStep(**step)
-    # 上一步是同一文件同一区间
-    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
-    msg = loop._dup_action_block(act)
-    assert msg and "同一文件同一区间" in msg
-
-
-def test_dup_read_diff_range_allowed(tmp_path):
-    """同一文件但区间不同（offset 变了）→ 放行（分页前进是合法的）。"""
-    loop = _mk_loop(tmp_path)
-    from app.runtime.protocol import AgentStep
-    act = AgentStep(thought="翻页看后面", tool="read_file",
-                    args={"path": "big.py", "offset": 600, "limit": 15}, done=False)
-    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
-    assert loop._dup_action_block(act) == ""
-
-
-def test_dup_read_diff_file_allowed(tmp_path):
-    """换了个文件读 → 放行。"""
-    loop = _mk_loop(tmp_path)
-    from app.runtime.protocol import AgentStep
-    act = AgentStep(thought="读另一个文件", tool="read_file",
-                    args={"path": "other.py"}, done=False)
-    loop._prev_action = {"tool": "read_file", "args": {"path": "big.py", "offset": 590, "limit": 15}}
-    assert loop._dup_action_block(act) == ""
 
 
 # ---------- read_file 分页（T4 第二次失败补的边界处理） ----------
@@ -200,29 +167,6 @@ def test_read_file_pagination_bounds(tmp_path):
     r = registry._read_file(ws, {"path": "big.py"})
     assert r.ok and "[行" not in r.output
 
-
-# ---------- read_file 分页（T4 第二次失败补的边界处理） ----------
-
-def test_read_file_pagination_bounds(tmp_path):
-    """分页边界：offset=0 clamp、越界提示、非整数提示、末尾锚点——都不抛错。"""
-    from app.tools import registry
-    (tmp_path / "big.py").write_text("\n".join(f"line{i}" for i in range(1, 601)))
-    ws = tmp_path
-    # offset=0 → clamp 到 1
-    r = registry._read_file(ws, {"path": "big.py", "offset": 0, "limit": 3})
-    assert r.ok and "[行 1-3" in r.output
-    # 越界 → 提示不崩
-    r = registry._read_file(ws, {"path": "big.py", "offset": 9999, "limit": 3})
-    assert r.ok and "超出文件范围" in r.output
-    # 非整数 → 提示不崩
-    r = registry._read_file(ws, {"path": "big.py", "offset": "abc"})
-    assert r.ok and "整数行号" in r.output
-    # 末尾锚点
-    r = registry._read_file(ws, {"path": "big.py", "offset": 598, "limit": 100})
-    assert r.ok and "已到文件末尾" in r.output and "共 600 行" in r.output
-    # 小文件全文直读不受影响（无截断提示）
-    r = registry._read_file(ws, {"path": "big.py"})
-    assert r.ok and "[行" not in r.output
 
 
 # ---------- search_file（T4 第四次失败补：真实库定位必须有搜索） ----------
@@ -247,3 +191,59 @@ def test_search_file_locates_definitions(tmp_path):
     # 空 pattern
     r = registry._search_file(tmp_path, {"pattern": ""})
     assert "不能为空" in r.output
+
+
+# ---------- 顺序翻页护栏（T4 run7 实证补：逐页通读大文件 → 上下文臃肿 → JSON 崩坏） ----------
+
+def _read_act(path: str, offset: int, limit: int = 100):
+    from app.runtime.protocol import AgentStep
+    return AgentStep(thought="翻页", tool="read_file",
+                     args={"path": path, "offset": offset, "limit": limit}, done=False)
+
+
+def test_page_walk_blocked_after_3_sequential(tmp_path):
+    """同文件连续顺序翻 3 页仍只读 → 第 3 页拦截，提示 search_file。"""
+    loop = _mk_loop(tmp_path)
+    assert loop._page_walk_block(_read_act("big.py", 1)) == ""     # 页1
+    assert loop._page_walk_block(_read_act("big.py", 101)) == ""   # 页2
+    msg = loop._page_walk_block(_read_act("big.py", 201))          # 页3
+    assert msg and "search_file" in msg and "big.py" in msg
+    assert loop._page_walk["big.py"]["consec"] == 0  # 软墙：拦后清零可续翻
+
+
+def test_page_walk_soft_wall_allows_continue(tmp_path):
+    """软墙语义：拦一次后模型若仍坚持通读，下一页放行（非死墙）。"""
+    loop = _mk_loop(tmp_path)
+    loop._page_walk_block(_read_act("big.py", 1))
+    loop._page_walk_block(_read_act("big.py", 101))
+    loop._page_walk_block(_read_act("big.py", 201))  # 拦
+    assert loop._page_walk_block(_read_act("big.py", 301)) == ""   # 续翻放行
+    assert loop._page_walk_block(_read_act("big.py", 401)) == ""   # 再翻也放行（从0重计）
+    assert loop._page_walk_block(_read_act("big.py", 501)) != ""   # 又满3页 → 再拦
+
+
+def test_page_walk_non_sequential_resets(tmp_path):
+    """非接续翻页（跳读/折返）不累计：offset 不接上页末尾就重新计段。"""
+    loop = _mk_loop(tmp_path)
+    loop._page_walk_block(_read_act("big.py", 1))
+    loop._page_walk_block(_read_act("big.py", 101))
+    loop._page_walk_block(_read_act("big.py", 50))   # 折返 → 新段（末行 149）
+    assert loop._page_walk["big.py"]["consec"] == 1
+    assert loop._page_walk_block(_read_act("big.py", 150)) == ""   # 新段第2页（接 149）
+    msg = loop._page_walk_block(_read_act("big.py", 250))          # 新段第3页 → 拦
+    assert msg and "search_file" in msg
+
+
+def test_page_walk_full_read_and_other_tools_ignored(tmp_path):
+    """无 limit 的全文读、非 read_file 动作 → 不计数不拦。"""
+    loop = _mk_loop(tmp_path)
+    from app.runtime.protocol import AgentStep
+    full = AgentStep(thought="读全文", tool="read_file",
+                     args={"path": "big.py"}, done=False)
+    assert loop._page_walk_block(full) == ""          # 全文读不管
+    assert "big.py" not in loop._page_walk
+    edit = AgentStep(thought="改代码", tool="edit_file",
+                     args={"path": "big.py", "old": "a", "new": "b"}, done=False)
+    assert loop._page_walk_block(edit) == ""          # 非 read_file 不管
+    done = AgentStep(thought="完成", done=True)
+    assert loop._page_walk_block(done) == ""

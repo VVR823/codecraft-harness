@@ -70,6 +70,19 @@ PROGRESS_TOOLS = ("edit_file", "write_file", "run_tests")  # 能推进/验证任
 STALL_MSG = ("（系统提醒）你已连续 {n} 步只做侦察（{tools}）没有写文件或跑测试。"
              "如果已掌握足够信息，请直接 edit_file 修改目标文件或 run_tests 验证，别再只读。")
 
+# ---- 顺序翻页护栏（T4 run7 实证，2026-09-07）----
+# 模型在真实库大文件上会"从头逐页通读"：1-100 → 100-199 → 200-299 一路翻到底，
+# 无视空转雷达提醒与 search_file 引导（T4 第七次 run：600 行 test_regression.py
+# 翻了 4 页后上下文臃肿，第 5 次决策 JSON 崩坏整局 failed）。该模式与 dup 拦截
+# 互补：dup 拦"同区间重复读"，本护栏拦"区间顺序前进的翻页 walk"。
+PAGE_WALK_LIMIT = 3                          # 同文件连续顺序翻页 ≥3 页（仍无写/测）→ 拦截一次
+PAGE_WALK_MSG = ("检测到你正在逐页顺序通读 {path}（已连续第 {n} 页仍是纯读取，"
+                 "没有写文件或跑测试）。如果是在找某个测试/函数/报错位置，"
+                 "请调用 search_file 用关键词一步定位到 文件:行号，"
+                 "再 read_file offset 精读目标区间——不要从头逐页翻。"
+                 "只有当你确实需要把整个文件内容装进上下文（如通读实现源码理解逻辑）"
+                 "才继续翻页。请重新决策。")
+
 
 class LoopError(Exception):
     pass
@@ -155,6 +168,8 @@ class HarnessLoop:
         self._budget_approved = False
         # O4 空转雷达：同一段空转只提醒一次（出现进展动作后重置）
         self._stall_armed = False
+        # 顺序翻页护栏：path -> {"consec": 连续顺序翻页数, "end": 上次页末行}（T4 run7 实证补）
+        self._page_walk: dict[str, dict] = {}
 
     def _rebuild_verification_state(self) -> None:
         """从 trace 重建写/测步号（resume 续跑时用），verdict==ok 即全绿。"""
@@ -392,6 +407,11 @@ class HarnessLoop:
                     # 重复写操作拦截：上一步已成功执行过完全相同的动作，回放结果防空转
                     self.messages.append({"role": "user", "content": dup})
                     continue
+                pwalk = self._page_walk_block(act)
+                if pwalk:
+                    # 顺序翻页拦截：同文件连续翻页无进展 → 引导 search_file（软墙）
+                    self.messages.append({"role": "user", "content": pwalk})
+                    continue
                 # HIGH 工具审批（M2）：模型请求高危工具 → 拒绝 + 审计记录，喂回提示继续
                 spec = get_tool(act.tool_name) if act.tool_name else None
                 if spec is not None and spec.perm >= Perm.HIGH:
@@ -500,6 +520,39 @@ class HarnessLoop:
                     "不要重复提交同一操作。请 read_file 确认当前文件实际状态，"
                     "或 run_tests 验证进度，再决定下一步。")
         return ""
+
+    def _page_walk_block(self, act: AgentStep) -> str:
+        """顺序翻页护栏：read_file 带 limit 时，若区间接续上页末尾逐页前进则计数。
+
+        同文件连续顺序翻到第 PAGE_WALK_LIMIT 页（默认 3）仍只读不写不测 → 拦一次，
+        提示用 search_file 定位（T4 run7 实证：模型无视提醒从头逐页通读 600 行
+        test 文件 4 页 → 上下文臃肿 → JSON 崩坏整局）。软墙非死墙：拦截后该路径
+        计数清零，真想通读全文的模型可以继续翻，只是每满 3 页会被提醒一次。
+        返回空串 = 放行；否则返回喂回模型的拦截消息。
+        """
+        if act.done or act.tool_name != "read_file":
+            return ""
+        args = act.args or {}
+        path, offset, limit = args.get("path"), args.get("offset", 1), args.get("limit", 0)
+        if not path or not limit:  # 只针对分页读；全文读（无 limit）不管
+            return ""
+        try:
+            offset, limit = int(offset), int(limit)
+        except (TypeError, ValueError):
+            return ""
+        if offset < 1:
+            return ""  # 交给 read_file 的 clamp/提示，不计数
+        end = offset + limit - 1
+        prev = self._page_walk.get(path)
+        if prev and offset == prev["end"] + 1:
+            consec = prev["consec"] + 1
+        else:
+            consec = 1  # 非接续（跳读/换区间起点）→ 新一段，从 1 计
+        self._page_walk[path] = {"consec": consec, "end": end}
+        if consec < PAGE_WALK_LIMIT:
+            return ""
+        self._page_walk[path] = {"consec": 0, "end": end}  # 软墙：拦一次后清零可续翻
+        return PAGE_WALK_MSG.format(path=path, n=PAGE_WALK_LIMIT)
 
     # ---------- 工具执行 ----------
     def _execute(self, act: AgentStep, step: int) -> dict:
