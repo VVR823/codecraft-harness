@@ -21,6 +21,10 @@ class Tool(str, Enum):
     edit_file = "edit_file"
     write_file = "write_file"
     run_tests = "run_tests"
+    search_file = "search_file"   # T4 真实库定位（2026-09-06 registry 已注册+prompt 已教，
+                                  # 但协议白名单漏加——模型每次调 search_file 都被
+                                  # '未知工具'打回，被迫退回逐页 read_file。run7~10 四连
+                                  # '模型不听话'的真根因，2026-09-07 补）
     install_package = "install_package"   # M2：HIGH 权限占位，请求即审批拒绝+审计
 
 

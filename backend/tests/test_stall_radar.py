@@ -359,3 +359,59 @@ def test_page_read_small_pages_unchanged(tmp_path):
     # 末尾锚点语义保留
     r = registry._read_file(tmp_path, {"path": "big.py", "offset": 598, "limit": 100})
     assert r.ok and "已到文件末尾" in r.output and "共 600 行" in r.output
+
+
+# ---------- search_file 协议白名单（T4 run7~10 真根因：registry 注册了但协议枚举漏加） ----------
+
+def test_protocol_allows_search_file():
+    """AgentStep 校验放行 search_file——registry 有 handler、prompt 在教，协议必须开门。
+
+    T4 run7~10 四连实证：search_file 自 2026-09-06 注册进 registry + system prompt
+    教了用法 + 截断提示/翻页护栏都在喊'用 search_file'，但 protocol.Tool 枚举漏加
+    → 模型每次调 search_file 都被'未知工具'打回，被迫退回逐页 read_file 通读大文件。
+    """
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="定位目标测试", tool="search_file",
+                    args={"pattern": "github_escape", "path": "test/test_regression.py"},
+                    done=False)
+    assert act.tool_name == "search_file"
+    # 未知工具仍被拒（白名单没被放宽成自由串）
+    import pytest
+    with pytest.raises(Exception):
+        AgentStep(thought="幻觉工具", tool="delete_all_files", done=False)
+
+
+def test_protocol_parse_step_with_search_file():
+    """parse_step 全链路：模型输出 search_file JSON 决策 → 解析成功。"""
+    from app.runtime.protocol import parse_step
+    text = '{"thought": "搜一下", "tool": "search_file", "args": {"pattern": "def _pipe"}, "done": false}'
+    act = parse_step(text)
+    assert act.tool_name == "search_file" and act.args["pattern"] == "def _pipe"
+
+
+# ---------- search_file 协议白名单（T4 run7~10 真根因：registry 注册了但协议枚举漏加） ----------
+
+def test_protocol_allows_search_file():
+    """AgentStep 校验放行 search_file——registry 有 handler、prompt 在教，协议必须开门。
+
+    T4 run7~10 四连实证：search_file 自 2026-09-06 注册进 registry + system prompt
+    教了用法 + 截断提示/翻页护栏都在喊'用 search_file'，但 protocol.Tool 枚举漏加
+    → 模型每次调 search_file 都被'未知工具'打回，被迫退回逐页 read_file 通读大文件。
+    """
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="定位目标测试", tool="search_file",
+                    args={"pattern": "github_escape", "path": "test/test_regression.py"},
+                    done=False)
+    assert act.tool_name == "search_file"
+    # 未知工具仍被拒（白名单没被放宽成自由串）
+    import pytest
+    with pytest.raises(Exception):
+        AgentStep(thought="幻觉工具", tool="delete_all_files", done=False)
+
+
+def test_protocol_parse_step_with_search_file():
+    """parse_step 全链路：模型输出 search_file JSON 决策 → 解析成功。"""
+    from app.runtime.protocol import parse_step
+    text = '{"thought": "搜一下", "tool": "search_file", "args": {"pattern": "def _pipe"}, "done": false}'
+    act = parse_step(text)
+    assert act.tool_name == "search_file" and act.args["pattern"] == "def _pipe"
