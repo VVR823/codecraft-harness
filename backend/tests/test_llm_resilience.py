@@ -4,6 +4,8 @@
 不碰真网络——monkeypatch llm._call_once 抛/成功，llm.time.sleep 变 no-op（记参数）。
 """
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -127,3 +129,42 @@ def test_throttle_sleeps_on_fast_calls(_reset_state, monkeypatch):
     llm._throttle()  # 第二次：紧接上次 → 补 ~1.5s
     assert len(_reset_state["sleeps"]) == n_before + 1
     assert _reset_state["sleeps"][-1] > 1.0
+
+
+# ---------- O6+ 单次调用看门狗（T4 第六次 50min 僵尸 run 实证补） ----------
+
+def test_call_timeout_watchdog(_reset_state, monkeypatch):
+    """_call_once 内部挂死（模拟服务端假活）→ 看门狗不等，抛超时错误。
+
+    注意：autouse fixture 已把 time.sleep 变 no-op，所以挂死不能用 sleep(60)
+    模拟（会瞬间返回、线程正常结束、看门狗不触发）。用 threading.Event
+    永久阻塞才是真挂死。
+    """
+    monkeypatch.setattr(llm, "CALL_TIMEOUT", 0.3)  # 测试用短超时
+
+    class _HangingCompletions:
+        def create(self, **kw):
+            threading.Event().wait()  # 永不返回 → 模拟服务端假活
+
+    class _HangingChat:
+        def __init__(self):
+            self.completions = _HangingCompletions()
+
+    class _HangingClient:  # 形状对齐真 client：client.chat.completions.create
+        def __init__(self):
+            self.chat = _HangingChat()
+
+    t0 = time.monotonic()
+    try:
+        llm._call_once(_HangingClient(), "m", [{"role": "user", "content": "x"}], 0.2)
+        raise AssertionError("应当超时抛错")
+    except RuntimeError as e:
+        assert "超时" in str(e)
+    assert time.monotonic() - t0 < 5  # 看门狗没等 60s
+
+
+def test_timeout_error_kind_classified():
+    """超时错误归 timeout 类 → 中退避序列，不按 other 短退避。"""
+    assert llm._error_kind(RuntimeError("LLM 调用超时（>120s 未返回）")) == "timeout"
+    assert llm._backoff("timeout", 0) == 5
+    assert llm._backoff("timeout", 2) == 30

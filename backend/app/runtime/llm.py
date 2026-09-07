@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 import os
+import queue
+import threading
 import time
 from pathlib import Path
 
@@ -33,6 +35,7 @@ load_dotenv(BASE_DIR / ".env")
 MIN_CALL_INTERVAL = 1.5    # 公开调用最小间隔（秒）：防突发密集请求触发限流
 CIRCUIT_BREAK_AFTER = 3    # 连续失败 ≥N 次（跨调用累积）触发熔断
 CIRCUIT_COOLDOWN = 300     # 熔断硬冷却（秒）
+CALL_TIMEOUT = 120         # 单次调用总超时（秒）：看门狗，防代理吞超时/服务端假活挂死
 
 _fail_streak = 0           # 连续失败计数（跨公开调用累积，成功清零）
 _last_call_ts = 0.0        # 上次公开调用时间戳（限速用）
@@ -49,7 +52,7 @@ def _throttle():
 
 
 def _error_kind(e: Exception) -> str:
-    """错误分级：account(账户级1302) | rate(请求级429) | empty(空内容) | other。"""
+    """错误分级：account(账户级1302) | rate(请求级429) | empty(空内容) | timeout | other。"""
     s = str(e)
     if "1302" in s or "账户已达到速率限制" in s:
         return "account"
@@ -57,6 +60,8 @@ def _error_kind(e: Exception) -> str:
         return "rate"
     if "空内容" in s:
         return "empty"
+    if "超时" in s:
+        return "timeout"
     return "other"
 
 
@@ -66,6 +71,7 @@ def _backoff(kind: str, attempt: int) -> float:
         "account": (60, 180, 300),   # 账户级：窗口分钟级，长等
         "rate":    (5, 10, 15),      # 请求级：秒级窗口
         "empty":   (2, 4, 8),        # 高压空内容：短退避即时重试
+        "timeout": (5, 15, 30),      # 单次调用超时：服务端假活/高压，中退避
         "other":   (1, 2, 4),        # 网络等：普通退避
     }
     seq = table[kind]
@@ -87,9 +93,32 @@ def _client():
 
 def _call_once(client, model: str, messages: list[dict],
                temperature: float) -> tuple[str, dict]:
-    """单次调用（不重试），返回 (text, usage)。空内容按错误抛。"""
-    resp = client.chat.completions.create(
-        model=model, messages=messages, temperature=temperature)
+    """单次调用（不重试），返回 (text, usage)。空内容按错误抛。
+
+    O6+ 看门狗：socket 层 timeout=120 在代理吞超时/服务端假活时管不住单次调用
+    永久挂起（T4 第六次真机实证：一次 LLM 调用僵死 50 分钟拖垮整个 run）。
+    这里套 daemon 线程 + join(CALL_TIMEOUT) 总超时：超时抛错 → 走 _chat_with_retry
+    的分级退避重试。悬挂线程不 kill（无法 kill），由进程内残留，但每次调用新建
+    client、线程 daemon 化，残留不阻塞后续调用。
+    """
+    q: queue.Queue = queue.Queue(maxsize=1)
+
+    def _do():
+        try:
+            q.put(("ok", client.chat.completions.create(
+                model=model, messages=messages, temperature=temperature)))
+        except BaseException as e:  # noqa: BLE001 - 网络异常统一走重试链
+            q.put(("err", e))
+
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    t.join(CALL_TIMEOUT)
+    if t.is_alive():
+        raise RuntimeError(f"LLM 调用超时（>{CALL_TIMEOUT}s 未返回，可能服务端假活/代理吞超时）")
+    status, payload = q.get()
+    if status == "err":
+        raise payload
+    resp = payload
     text = (resp.choices[0].message.content or "").strip()
     if not text:
         raise RuntimeError("LLM 返回空内容")
