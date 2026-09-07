@@ -24,5 +24,10 @@ LLM_MODEL = "glm-4.5-flash"
 DEFAULT_TOKEN_BUDGET = 30_000  # 单 run 预算
 
 # agent loop（Q11）
-MAX_STEPS = 15                 # 单 run 最大步数（防死循环/预算失控）
+# MAX_STEPS：15 → 30（2026-09-07，T4 真实库任务实证）。玩具任务（T1~T3）4~6 步
+# 就到 done，15 步绰绰有余；真实库任务（600 行测试 + 千行源码）光"读测试定位目标
+# 测试 → 读实现相关段"就要 8~12 步侦察，15 步会在 edit+复测前触顶 paused（T4 run8/9
+# 连续两局实证）。防失控的真正刹车是 token 预算（DEFAULT_TOKEN_BUDGET）+ 空转雷达
+# + 护栏，步数是兜底——30 步对免费模型可接受（每步决策 token 受 watch 限）。
+MAX_STEPS = 30                 # 单 run 最大步数（防死循环/预算失控）
 LLM_RETRY = 3                  # JSON 解析失败最多重试次数（免费模型 JSON 偶发崩，2026-09-04 从 2 提 3）
