@@ -247,3 +247,45 @@ def test_page_walk_full_read_and_other_tools_ignored(tmp_path):
     assert loop._page_walk_block(edit) == ""          # 非 read_file 不管
     done = AgentStep(thought="完成", done=True)
     assert loop._page_walk_block(done) == ""
+
+
+# ---------- 工具结果消息不二次截断（T4 run8 实证：2000 字符消息层砍掉页尾目标测试） ----------
+
+def test_read_result_message_not_double_truncated(tmp_path):
+    """消息层截断上限 = registry 输出上限：工具给了多少内容，模型就能看到多少。
+
+    T4 run8 实证：页读 500-599 行输出 3682 字符（含第 596 行的目标测试），消息层
+    2000 字符二次截断把它砍半——目标测试永远看不到，模型只能反复换读法空转 15 步。
+    """
+    from app.runtime.protocol import AgentStep
+    # ~4200 字符文件：超过旧 2000 上限、低于 registry 6000 上限 → 工具全量给出
+    body = "\n".join(f"line{i:04d} " + "x" * 40 for i in range(1, 90))
+    (tmp_path / "medium.py").write_text(body, encoding="utf-8")
+    loop = _mk_loop(tmp_path)
+    act = AgentStep(thought="读文件", tool="read_file",
+                    args={"path": "medium.py"}, done=False)
+    loop._execute(act, 1)
+    msg = loop.messages[-1]["content"]
+    assert "line0089" in msg    # 文件尾部内容可见（未被砍）
+    assert "截断" not in msg     # 消息层没有二次截断标记
+
+
+# ---------- 工具结果消息不二次截断（T4 run8 实证：2000 字符消息层砍掉页尾目标测试） ----------
+
+def test_read_result_message_not_double_truncated(tmp_path):
+    """消息层截断上限 = registry 输出上限：工具给了多少内容，模型就能看到多少。
+
+    T4 run8 实证：页读 500-599 行输出 3682 字符（含第 596 行的目标测试），消息层
+    2000 字符二次截断把它砍半——目标测试永远看不到，模型只能反复换读法空转 15 步。
+    """
+    from app.runtime.protocol import AgentStep
+    # ~4200 字符文件：超过旧 2000 上限、低于 registry 6000 上限 → 工具全量给出
+    body = "\n".join(f"line{i:04d} " + "x" * 40 for i in range(1, 90))
+    (tmp_path / "medium.py").write_text(body, encoding="utf-8")
+    loop = _mk_loop(tmp_path)
+    act = AgentStep(thought="读文件", tool="read_file",
+                    args={"path": "medium.py"}, done=False)
+    loop._execute(act, 1)
+    msg = loop.messages[-1]["content"]
+    assert "line0089" in msg    # 文件尾部内容可见（未被砍）
+    assert "截断" not in msg     # 消息层没有二次截断标记

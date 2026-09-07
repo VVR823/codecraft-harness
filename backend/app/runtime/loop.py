@@ -22,6 +22,7 @@ from ..config import LLM_RETRY, MAX_STEPS
 from ..store import db
 from ..tools import approval
 from ..tools.registry import (  # noqa: E402
+    READ_FILE_CAP,
     Perm,
     ToolError,
     describe_tools,
@@ -584,7 +585,10 @@ class HarnessLoop:
         self.messages.append({"role": "assistant",
                               "content": f"调用 {tool} {json.dumps(args, ensure_ascii=False)}"})
         self.messages.append({"role": "user",
-                              "content": f"[工具结果 {tool}] {_truncate(output, 2000)}"})
+                              "content": f"[工具结果 {tool}] {_truncate(output, READ_FILE_CAP)}"})
+        # 注意：消息层上限 = READ_FILE_CAP(6000)，与 registry read_file/search_file 输出上限一致，
+        # 不能更小——否则工具自限后的输出被消息层二次截断（T4 run8 实证：600 行 test 文件
+        # 页读 3682 字符被 2000 砍半，第 596 行的目标测试永远看不到，模型只能反复换读法）
         self.done_actions.append({"step": step, "tool": tool,
                                   "args": args, "result_tail": _truncate(output, 300)})
         # 记录上一步成功动作（重复动作护栏用；handler 失败时不上记录→模型可重试同动作）
