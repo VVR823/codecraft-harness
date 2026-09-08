@@ -62,13 +62,31 @@ SYSTEM_PROMPT = _SYSTEM_HEAD + "\n可用工具（注册表生成，与执行校�
 # 工具结果截断上限（防上下文爆炸的 v0 防线，正式分层压缩在 context.py）
 TOOL_OUTPUT_CAP = 3000
 
+# ---- GitHub 交付模式（2026-09-08，对标 MyCoder GitHub mode）----
+# drive_task --github 时注入 system prompt 尾部的交付流程指引。工具本身（git_branch/
+# git_commit/git_push/gh_create_pr）已注册进 registry（权限 MED + 环境门闩），
+# describe_tools() 自动带说明书；这里补的是"何时用、按什么顺序"的流程语义——
+# 免费模型只在目标里明说要交付时才走这套（普通修复任务看不到这段指引）。
+GITHUB_SYSTEM_EXTRA = """【GitHub 交付流程】（本任务已开启 --github 交付模式）
+代码修复到 run_tests 全绿后，按顺序完成交付，把改动变成 GitHub 上的一个 PR：
+1. git_branch {"branch": "<描述性分支名，如 fix/split-csv-quoting>"} —— 从当前 HEAD 新建分支并切换
+2. （修复代码在上文已完成且 run_tests 全绿，则跳过改码；若还没修完，先 edit_file → run_tests 全绿）
+3. git_commit {"message": "<约定式提交信息，如 fix: 支持引号内逗号>"} —— 提交当前分支上的全部改动
+4. git_push {} —— 推送到远端 origin
+5. gh_create_pr {"title": "...", "body": "..."} —— 给当前分支向 main 开 PR
+PR 创建成功（输出含 github.com 链接）后，输出 done 收尾。交付动作本身就是任务产出，
+不需要在交付后再跑 run_tests（最后一次写文件后的全绿已验证过）。
+若某一步失败，工具会返回具体原因，先 read_file / git 状态确认再重试，不要盲目重复同一步。"""
+
 # ---- O4 空转雷达（2026-09-05）----
 # 免费模型在长上下文/高压下会"原地打转"：连续只 read_file 不写不测（B6a 补测实证：
 # T2 plan 档 step1~5 全读 test_module.py，空转 35k token 才被预算护栏截停）。
 # 雷达 = 连续 STALL_LIMIT 个动作全是零进展工具 → 触发。纯观测默认开（只记 trace + 日志，
 # 不改执行流 → 数字① 口径零影响）；stall_warning=True 时才把提醒注入上下文（长任务按需开）。
 STALL_LIMIT = 3                              # 连续多少个零进展动作判空转
-PROGRESS_TOOLS = ("edit_file", "write_file", "run_tests")  # 能推进/验证任务的工具
+PROGRESS_TOOLS = ("edit_file", "write_file", "run_tests",
+                  "git_branch", "git_commit", "git_push", "gh_create_pr")  # 能推进/验证任务的动作
+                  # （git 四件套算进展：交付尾巴 branch→commit→push→pr 连续 4 步不该被空转雷达误报）
 STALL_MSG = ("（系统提醒）你已连续 {n} 步只做侦察（{tools}）没有写文件或跑测试。"
              "如果已掌握足够信息，请直接 edit_file 修改目标文件或 run_tests 验证，别再只读。")
 
@@ -119,7 +137,8 @@ class HarnessLoop:
                  skill_dir: str | Path | None = None,
                  use_mcp: bool = False,
                  mcp_servers: list | None = None,
-                 use_memory: bool = False):
+                 use_memory: bool = False,
+                 use_github: bool = False):
         """token_budget: 单 run token 上限（None=不启用护栏，默认无护栏）。
         meter: 外部共享的 token 计量 dict（decider 包装层累加 meter["tokens"]，
         loop 只读判断是否超限）——计量与决策解耦，任何 decider 都能挂护栏。
@@ -138,6 +157,10 @@ class HarnessLoop:
         spawn_client 的默认 demo server。默认关→数字①口径不动。
         use_memory: M5 长期记忆开关——开=run 开始时注入该任务历史记忆（经验复用），
         run 结束沉淀新记忆（成功路径/失败教训）。默认关→数字①口径不动。
+        use_github: GitHub 交付模式开关——开=system prompt 尾部注入交付流程指引
+        （git_branch→commit→push→gh_create_pr），把"自修到全绿"升级为"自修到 PR"。
+        工具执行靠 registry handler 内的 HARNESS_GITHUB 环境门闩放行（drive_task
+        --github 会置位），loop 只负责注入指引；默认关→基线 run 的提示词不含交付段。
         """
         self.workspace = Path(task_dir)
         if not self.workspace.is_dir():
@@ -151,6 +174,7 @@ class HarnessLoop:
         self._mcp_servers = mcp_servers or []
         self._mcp_clients: list = []      # 持有的 MCP client（run 结束统一 stop）
         self.use_memory = use_memory
+        self.use_github = use_github
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self.task_id = task_id or self.workspace.name
         self.token_budget = token_budget
@@ -307,10 +331,15 @@ class HarnessLoop:
                 {"role": "user", "content": user}]
 
     def _system_prompt(self) -> str:
-        """system prompt：use_mcp 时动态重算（MCP 工具运行期才注册，静态常量不含）。"""
-        if not self.use_mcp:
-            return SYSTEM_PROMPT
-        return _SYSTEM_HEAD + "\n可用工具（注册表生成，含 MCP 动态工具）:\n" + describe_tools()
+        """system prompt：use_mcp 时动态重算（MCP 工具运行期才注册，静态常量不含）；
+        use_github 时追加交付流程指引（普通修复 run 不含，基线口径不动）。"""
+        if self.use_mcp:
+            base = _SYSTEM_HEAD + "\n可用工具（注册表生成，含 MCP 动态工具）:\n" + describe_tools()
+        else:
+            base = SYSTEM_PROMPT
+        if self.use_github:
+            base = base + "\n" + GITHUB_SYSTEM_EXTRA
+        return base
 
     # ---------- MCP 接入（M5-B2） ----------
     def _setup_mcp(self) -> None:

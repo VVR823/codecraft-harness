@@ -17,6 +17,7 @@ paused 自动续跑：MAX_STEPS 段内步数触顶（真实库任务探索开销
 从该 run 最后 checkpoint 续跑一段（不自动循环，看结果决定是否再续）。
 """
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,12 @@ def main():
                     help="开 M5 长期记忆：注入同任务历史经验 + 结束沉淀")
     ap.add_argument("--resume", default=None, metavar="RUN_ID",
                     help="续跑指定 run_id（从最后 checkpoint 跑一段，不自动循环）")
+    ap.add_argument("--github", action="store_true",
+                    help="开 GitHub 交付模式：置 HARNESS_GITHUB 环境门闩放行 git_branch/"
+                         "git_commit/git_push/gh_create_pr 四工具，loop 注入交付流程指引")
+    ap.add_argument("--workspace", default=None, metavar="DIR",
+                    help="覆盖工作区目录（goal 仍读 tasks/<task_name>/README.md）。GitHub 交付"
+                         "任务用：workspace=独立 clone 的交付仓库，测试/改码/推 PR 都作用于它")
     args = ap.parse_args()
 
     task_dir = TASKS / args.task_name
@@ -83,6 +90,9 @@ def main():
 
     goal = (task_dir / "README.md").read_text(encoding="utf-8")
     db.init_db()
+    if args.github:
+        os.environ["HARNESS_GITHUB"] = "1"   # registry git/gh 工具的环境门闩
+        print("[github] 交付模式已开启：git_branch/commit/push + gh_create_pr 可用")
 
     def decider(messages):
         if args.model:
@@ -90,16 +100,21 @@ def main():
         return chat(messages)
 
     model_name = args.model or "config 默认"
+    ws = Path(args.workspace) if args.workspace else task_dir
+    if not ws.is_dir():
+        sys.exit(f"--workspace 目录不存在: {ws}")
     loop = HarnessLoop(
-        task_dir, goal, decider=decider, use_plan=args.plan,
+        ws, goal, decider=decider, use_plan=args.plan,
         use_skills=args.skills, skill_dir=str(SKILLS_DIR) if args.skills else None,
         use_mcp=args.mcp,
         use_memory=args.memory,
+        use_github=args.github,
         stall_warning=True,   # 周期式空转提醒注入：长 run 侦察空转需主动拉回（T4 run12/14 实证）
         run_id=args.resume,   # 人工续跑复用指定 run_id；新跑为 None（自动生成）
     )
     print(f"run_id: {loop.run_id} | task: {loop.task_id} | model: {model_name}"
-          f" | skills={args.skills} mcp={args.mcp} memory={args.memory}")
+          f" | skills={args.skills} mcp={args.mcp} memory={args.memory}"
+          f" | github={args.github} | workspace={ws.name}")
     print("=" * 60)
     if args.resume:
         print(f"[resume] 人工续跑 {args.resume}（一段 MAX_STEPS 步配额）")

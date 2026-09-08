@@ -71,7 +71,7 @@ backend/
 │   └── trace/                 # 事件 trace 记录
 ├── tasks/                     # T1~T3 手写任务包（module + 测试 + README，git 作还原点）
 ├── scripts/                   # drive_task/run_all/run_resume_test/measure_*（实测工具）
-├── tests/                     # 85 个单元测试（含真沙箱跑任务包；conftest 隔离临时库，不碰 data/harness.db）
+├── tests/                     # 125 个单元测试（含真沙箱跑任务包 + GitHub 交付四工具真 git 链路；conftest 隔离临时库，不碰 data/harness.db）
 └── pytest.ini                 # 回归只收 tests/，排除任务包"考卷"
 ```
 

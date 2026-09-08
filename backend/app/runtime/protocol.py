@@ -26,6 +26,13 @@ class Tool(str, Enum):
                                   # '未知工具'打回，被迫退回逐页 read_file。run7~10 四连
                                   # '模型不听话'的真根因，2026-09-07 补）
     install_package = "install_package"   # M2：HIGH 权限占位，请求即审批拒绝+审计
+    # GitHub 交付四件套（2026-09-08，对标 MyCoder GitHub mode；registry 已注册、
+    # 权限 MED + handler 内环境门闩 HARNESS_GITHUB，drive_task --github 才放行）。
+    # 与 search_file 同款教训：协议白名单漏加 = 模型每次调用都被打回。
+    git_branch = "git_branch"          # 新建/切换分支（交付隔离）
+    git_commit = "git_commit"          # 提交工作区全部改动
+    git_push = "git_push"              # 推送当前分支到 origin
+    gh_create_pr = "gh_create_pr"      # 开 PR 到 main
 
 
 MCP_PREFIX = "mcp_"   # M5-B2：MCP 动态工具命名空间前缀（mcp_<server>__<tool>）
