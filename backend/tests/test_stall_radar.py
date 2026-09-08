@@ -453,3 +453,31 @@ def test_dup_search_diff_pattern_allowed(tmp_path):
     act = AgentStep(thought="换词搜", tool="search_file",
                     args={"pattern": "DataRow"}, done=False)
     assert loop._dup_action_block(act) == ""
+
+
+# ---------- ToolError 喂回不崩 run（T4 run15 实证：edit old 抄错 → LoopError 整局 failed） ----------
+
+def test_tool_error_feeds_back_not_crash(tmp_path):
+    """edit_file old 不匹配（ToolError）→ ok=False 结果喂回，不崩 run。
+
+    run15（4e2f951657d0）实证：模型凭记忆 edit 抄错 old（pipe 定义 lineabove 抄成
+    None），ToolError 被 raise LoopError → 整局 failed，21 步侦察白费。工具级可
+    恢复错误应作为工具结果让模型看到原因后纠正（先 read_file 再复制准确原文）。
+    """
+    loop = _mk_loop(tmp_path)
+    (tmp_path / "x.py").write_text("a = 1\n", encoding="utf-8")
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="改", tool="edit_file",
+                    args={"path": "x.py", "old": "b = 2", "new": "c = 3"}, done=False)
+    r = loop._execute(act, 1)                    # 不 raise
+    assert "找不到要替换" in r["output"]          # 错误原因在结果里
+    # 喂回消息带错误（模型能看见并纠正）
+    joined = "\n".join(m.get("content", "") for m in loop.messages)
+    assert "[工具错误]" in joined
+    # trace 记录 fail 而非崩溃
+    traces = db.list_traces(loop.run_id)
+    assert any(t["verdict"] == "fail" for t in traces)
+    # _prev_action 记录了失败动作 → 模型原样重试会撞 dup 拦截拿到 read_file 引导
+    # （同参 edit 重试必然再失败，拦下引导转向比放行重试更有效）
+    assert loop._prev_action is not None and loop._prev_action["tool"] == "edit_file"
+

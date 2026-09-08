@@ -25,6 +25,7 @@ from ..tools.registry import (  # noqa: E402
     READ_FILE_CAP,
     Perm,
     ToolError,
+    ToolResult,
     describe_tools,
     get_tool,
     list_tool_names,
@@ -585,7 +586,11 @@ class HarnessLoop:
         try:
             result = spec.handler(self.workspace, args)
         except ToolError as e:
-            raise LoopError(str(e)) from e
+            # 工具级可恢复错误（edit old 不匹配/文件不存在/old 不唯一/路径越界/MCP
+            # 失败等）：转 ok=False 结果喂回模型纠正重试，不崩 run——T4 run15 实证：
+            # 模型凭记忆 edit 抄错 old 一次 → 崩 LoopError → 整局 failed，21 步侦察
+            # 全白费。模型看到"[工具错误] 文件里找不到..."会先 read_file 再改。
+            result = ToolResult(f"[工具错误] {e}", ok=False)
         output = result.output
         verdict = "ok" if result.ok else "fail"
         # 强制验证状态：记录最后一次写文件 / 最后一次全绿测试的步号
