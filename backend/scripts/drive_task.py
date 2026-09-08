@@ -95,6 +95,7 @@ def main():
         use_skills=args.skills, skill_dir=str(SKILLS_DIR) if args.skills else None,
         use_mcp=args.mcp,
         use_memory=args.memory,
+        stall_warning=True,   # 周期式空转提醒注入：长 run 侦察空转需主动拉回（T4 run12/14 实证）
         run_id=args.resume,   # 人工续跑复用指定 run_id；新跑为 None（自动生成）
     )
     print(f"run_id: {loop.run_id} | task: {loop.task_id} | model: {model_name}"

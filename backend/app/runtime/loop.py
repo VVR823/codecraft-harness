@@ -167,8 +167,10 @@ class HarnessLoop:
         self._prev_action: dict | None = None
         # 预算护栏：人工批准续跑后置 True，本轮不再因超限暂停（"人已放行"语义）
         self._budget_approved = False
-        # O4 空转雷达：同一段空转只提醒一次（出现进展动作后重置）
-        self._stall_armed = False
+        # O4 空转雷达：_stall_warned_at 记录上次提醒/复位时的动作计数位置，
+        # 零进展再满 STALL_LIMIT 步即再次提醒（周期式，非整段一次；T4 run12/14
+        # 实证 search 轰炸 14 步只提醒一次拉不回来）；出现进展动作即复位到当前。
+        self._stall_warned_at = 0
         # 顺序翻页护栏：path -> {"consec": 连续顺序翻页数, "end": 上次页末行}（T4 run7 实证补）
         self._page_walk: dict[str, dict] = {}
 
@@ -521,6 +523,14 @@ class HarnessLoop:
                 return (f"你已连续两次 read_file 同一文件同一区间（{p1}），没有拿到新信息。"
                         "请换动作：run_tests 看失败详情，或用 offset/limit 分页读文件的其他区间，"
                         "或直接 edit_file 修复。不要原地重复读。")
+        if tool_name == "search_file" and prev["tool"] == "search_file" \
+                and (act.args or {}) == (prev["args"] or {}):
+            # 同参数 search 连发 = 空转（T4 run14 实证：step15-30 连发 16 次
+            # search_file {} 空 pattern，registry 每次只回引导文本，模型无视继续空搜）。
+            # 第一步就拦，逼模型换具体 pattern 或转其他动作。
+            return (f"你已连续两次 search_file 完全相同参数（{prev['args']}），不会拿到新结果。"
+                    "请换具体 pattern（函数名/变量名/报错关键词），或 read_file 精读"
+                    "已定位的行号区间，或直接 edit_file/run_tests。不要重复同一搜索。")
         if tool_name in ("edit_file", "write_file") and prev["tool"] == tool_name and prev["args"] == act.args:
             return (f"你上一步已成功执行过完全相同的 {tool_name}（参数一致），"
                     "不要重复提交同一操作。请 read_file 确认当前文件实际状态，"
@@ -606,20 +616,23 @@ class HarnessLoop:
 
         纯观测（默认）：只记 trace（verdict=stall）+ 打日志，不改执行流、不碰 messages
         ——数字①/②/③ 口径零影响。stall_warning=True 时把提醒注入上下文拉模型回正轨。
-        同一段空转只提醒一次：出现进展动作（_stall_armed 复位）后才可能再触发。
+        周期性提醒：_stall_warned_at 记录上次提醒/复位的动作位置，零进展再满
+        STALL_LIMIT 步就再次提醒——长空转（search 轰炸/空 search）需要多次提醒
+        拉回（T4 run12/14 实证 14 步空转只提醒一次无效）；出现进展动作即复位。
         """
-        if len(self.done_actions) < STALL_LIMIT:
+        n = len(self.done_actions)
+        if n < STALL_LIMIT:
             return
         recent = self.done_actions[-STALL_LIMIT:]
         if any(a["tool"] in PROGRESS_TOOLS for a in recent):
-            self._stall_armed = False  # 有进展 → 复位，允许下次空转再提醒
+            self._stall_warned_at = n  # 有进展 → 复位（从当前位置重新计空转）
             return
-        if self._stall_armed:
-            return  # 同一段空转已提醒过，别刷屏
-        self._stall_armed = True
+        if n - self._stall_warned_at < STALL_LIMIT:
+            return  # 距上次提醒不足 STALL_LIMIT 步，不刷屏
+        self._stall_warned_at = n
         tools = ", ".join(a["tool"] for a in recent)
         msg = STALL_MSG.format(n=STALL_LIMIT, tools=tools)
-        db.append_trace(self.run_id, len(self.done_actions), "", "",
+        db.append_trace(self.run_id, n, "", "",
                         _truncate(f"stall_warning: {msg}", 300), 0, "stall")
         print(f"[空转雷达] 连续 {STALL_LIMIT} 步零进展（{tools}）→ 已记录", flush=True)
         if self.stall_warning:

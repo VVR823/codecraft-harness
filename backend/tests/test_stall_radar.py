@@ -38,7 +38,7 @@ def test_no_stall_below_limit(tmp_path):
     loop.done_actions = _reads(2)
     loop._stall_radar()
     assert _stall_traces(loop) == []
-    assert loop._stall_armed is False
+    assert loop._stall_warned_at == 0
 
 
 def test_stall_triggers_after_3_reads(tmp_path):
@@ -57,7 +57,7 @@ def test_progress_action_resets(tmp_path):
     loop.done_actions = _reads(2) + [{"tool": "edit_file", "args": {}, "step": 3}]
     loop._stall_radar()
     assert _stall_traces(loop) == []
-    assert loop._stall_armed is False
+    assert loop._stall_warned_at == 3
 
 
 def test_same_stall_warns_only_once(tmp_path):
@@ -95,7 +95,7 @@ def test_warning_injects_message_when_enabled(tmp_path):
     loop.done_actions = _reads(3)
     loop._stall_radar()
     assert any("系统提醒" in (m.get("content") or "") for m in loop.messages)
-    assert loop._stall_armed is True
+    assert loop._stall_warned_at == 3
 
 
 def test_warning_not_injected_by_default(tmp_path):
@@ -415,3 +415,41 @@ def test_protocol_parse_step_with_search_file():
     text = '{"thought": "搜一下", "tool": "search_file", "args": {"pattern": "def _pipe"}, "done": false}'
     act = parse_step(text)
     assert act.tool_name == "search_file" and act.args["pattern"] == "def _pipe"
+
+
+# ---------- 周期式空转提醒 + search_file 重复拦截（T4 run12/14 实证补，2026-09-07） ----------
+
+def test_stall_repeats_periodically(tmp_path):
+    """长空转周期提醒：连续 8 个 read，第 3/6 个后各提醒一次（不再整段只一次）。"""
+    loop = _mk_loop(tmp_path)
+    loop.done_actions = _reads(3)
+    loop._stall_radar()
+    assert len(_stall_traces(loop)) == 1   # 第 3 个后首次提醒
+    loop.done_actions = _reads(6)
+    loop._stall_radar()
+    assert len(_stall_traces(loop)) == 2   # 再满 3 步 → 再次提醒（run14 14 步空搜场景）
+    loop.done_actions = _reads(8)
+    loop._stall_radar()
+    assert len(_stall_traces(loop)) == 2   # 8-6=2 < 3，还不到下次提醒
+    assert loop._stall_warned_at == 6
+
+
+def test_dup_search_same_args_blocked(tmp_path):
+    """连续两次 search_file 完全同参数 → 拦截（run14 空 search {} 连发 16 步实证）。"""
+    loop = _mk_loop(tmp_path)
+    from app.runtime.protocol import AgentStep
+    act = AgentStep(thought="再搜一次", tool="search_file",
+                    args={"pattern": ""}, done=False)
+    loop._prev_action = {"tool": "search_file", "args": {"pattern": ""}}
+    msg = loop._dup_action_block(act)
+    assert msg and "search_file" in msg and "pattern" in msg
+
+
+def test_dup_search_diff_pattern_allowed(tmp_path):
+    """异 pattern search 放行（搜索是有效的定位手段，只拦原地重复）。"""
+    loop = _mk_loop(tmp_path)
+    from app.runtime.protocol import AgentStep
+    loop._prev_action = {"tool": "search_file", "args": {"pattern": "def _build_row"}}
+    act = AgentStep(thought="换词搜", tool="search_file",
+                    args={"pattern": "DataRow"}, done=False)
+    assert loop._dup_action_block(act) == ""
