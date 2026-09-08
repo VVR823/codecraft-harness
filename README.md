@@ -6,7 +6,8 @@
 > 轻量沙箱隔离、可中断续跑、可审计回放、成本有护栏。**核心全部自研**（不引 LangChain）。
 
 定位：秋招第二作品，主打**系统设计深度**——证明"能设计 AI 系统本身的工程骨架"。
-配套文档：[执行计划 v2.2](docs/执行计划_v2.2.md)（grill 三轮拷问定稿，15 项决策有出处）。
+配套文档：[执行计划 v2.2](docs/执行计划_v2.2.md)（grill 三轮拷问定稿，15 项决策有出处）·
+[业界对标调研](docs/业界对标调研.md)（MyCoder/MiniCode/OpenHands/LangGraph 逐能力项对照，含面试话术速查）。
 
 ## 硬数字（2026-09-04~05 实测）
 
@@ -33,6 +34,10 @@
 | T3 跨文件 bug | 中等 | 2/2 | 14,662 | 6 | 9 | ~352s |
 
 单次 run 实际 token 5k~18k，免费档成本≈0；付费 air 单次约 1~3 分钱。最大单次 18,147 token（预算护栏校准基数 ≈27k）。
+
+**数字⑤ 真实开源库端到端验证：13 个失败样本 → 13 个 harness 缺陷全修，收官 3 局成功**（免费 `glm-4.5-flash` 在**真实开源库 tabulate** 上定位并修复一个历史 bug；600 行回归测试 + 2897 行全量源码、目标测试在文件倒数第 5 行，详见 [T4 战报](docs/t4_real_library_report_2026-09-07.md)）
+
+> T1~T3 是自写"考卷"，T4 换**真实开源库**检验脏活：前 13 局失败逐一逼出 harness 自身缺陷（消息层二次截断/工具白名单漏门/配额段语义 bug…），每修一个都带回归测试；修复后 run13 resume 首胜（33 步）、run14 全自动完成（35 步，auto-resume×2）、run16 单段一次过（**20 步 11 分钟**，空转治理 + ToolError 喂回见效）。中间 run15 又暴露一个缺陷（工具错误崩局）已修复——**失败全部归因 harness，不甩锅模型**。方法论沉淀：新增工具 = registry + prompt + protocol 三处联动；先查"模型看到的内容是否完整"，再怀疑模型。
 
 **MVP 底线五条进度（2026-09-04 五条全证，②③ 已有独立真机实测）**
 
@@ -112,6 +117,9 @@ python scripts/drive_task.py t1_single_fix --memory   # 长期记忆：复用历
 
 # 6. 单元测试
 python -m pytest tests/ -q
+
+# 7. T4 真实开源库任务（tabulate 反向 bug，600 行回归测试）
+python scripts/drive_task.py t4_github_pipe_escape --model glm-4.5-flash
 ```
 
 ## 已知边界（踩坑记录，面试可讲）
@@ -135,3 +143,4 @@ python -m pytest tests/ -q
 | W5+ | M3 余项：多模型评估 + 长任务压缩率上界复测 | ✅ 2026-09-04~05（Day5 A/B + 24 步 55.5% 上界，commit 6eba0ea） |
 | W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | ✅ 2026-09-06 收官（B1~B4 + B6a 背靠背 9b151cd/d323d65 + B6b 归档 87cc0f1 + B6c 文档收官；O1-O6 精益优化 78ddfcd，单测 52/52；B5 最简 UI 未做——Q10 余力项，保持待拍板） |
 | W9 | M5：JD 关键词补强——Skills 注册 + MCP（自研 client+demo server）+ 长期记忆（详见 [执行计划_M5.md](docs/执行计划_M5.md)） | ✅ 2026-09-06（Skills/MCP/记忆 29 新测，单测 52→85；真机三开关全开 T1 全绿 run `b5c4a1e61208`，见 [留档报告](docs/m5_smoke_report_2026-09-06.md)；测试 DB 隔离 + 两处 docstring 对齐 85/85；三模块默认关不碰 6/6 基线） |
+| W10 | T4：真实开源库任务（tabulate 反向 bug）真机验证 + GitHub 发布 + CI | ✅ 2026-09-07（13 失败→13 harness 缺陷全修 + 单测 85→110；收官 3 局成功：resume 首胜/全自动 35 步/单段 20 步·11 分钟，见 [T4 战报](docs/t4_real_library_report_2026-09-07.md)；公开仓 VVR823/codecraft-harness，Actions CI ubuntu+py3.13 全绿） |
