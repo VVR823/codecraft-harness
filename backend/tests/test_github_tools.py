@@ -227,27 +227,31 @@ def test_ensure_branch_born_raises_without_base(repo):
 
 def test_find_gh_prefers_which(monkeypatch):
     """gh 定位：PATH 优先（任何名字的 gh 可执行）；找不到走 GH_BIN；都没有抛 ToolError。
-    不强制 .exe 后缀——Linux runner 上 PATH 自带 /usr/bin/gh，没扩展名。"""
+    不强制 .exe 后缀——Linux runner 上 PATH 自带 /usr/bin/gh，没扩展名。
+    三个 case 各自独立 PATH/GH_BIN，互不污染（CI runner PATH 永远有 gh）。"""
     import os
+    import shutil
     import tempfile
     from pathlib import Path
+    # case 1: PATH 命中即可（不强制 .exe 后缀；CI runner PATH 自带 /usr/bin/gh）
     with tempfile.TemporaryDirectory() as td:
         gh = os.path.join(td, "gh.exe")
         with open(gh, "w") as f:
             f.write("")
         monkeypatch.setenv("PATH", td + os.pathsep + os.environ.get("PATH", ""))
-        # 至少返回一个可执行 gh 路径；CI runner 可能优先命中系统 /usr/bin/gh
         found = _find_gh()
-        assert os.path.basename(found).startswith("gh") and os.access(found, os.X_OK)
-    # GH_BIN 指定场景（which 已无命中）
-    monkeypatch.delenv("GH_BIN", raising=False)
+        assert os.path.basename(found).startswith("gh") and os.access(found, os.X_OK), found
+    # case 2: 清空 PATH 后 GH_BIN 必须返回它（which 已无命中）
     with tempfile.TemporaryDirectory() as td:
         gh = os.path.join(td, "gh_custom.exe")
         with open(gh, "w") as f:
             f.write("")
+        monkeypatch.setenv("PATH", "")            # 让 which("gh") 一定 None
         monkeypatch.setenv("GH_BIN", gh)
+        # 同时把 home 指到空目录，排除默认安装位 ~/.workbuddy/binaries/gh 命中
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: Path(td)))
         assert _find_gh() == gh
-    # 都没有 → 明确 ToolError（把 home 指到空目录，排除本机默认安装位的干扰）
+    # case 3: 都没有 → 明确 ToolError
     monkeypatch.delenv("GH_BIN", raising=False)
     monkeypatch.setenv("PATH", "")
     with tempfile.TemporaryDirectory() as td:
