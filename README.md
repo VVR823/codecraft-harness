@@ -1,5 +1,7 @@
 # CodeCraft Harness
 
+[![CI](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)
+
 > 给一个自然语言工程目标，AI Agent 自主完成「规划 → 写码 → 跑测试 → 失败自修 → 全绿」的多轮长任务。
 > 轻量沙箱隔离、可中断续跑、可审计回放、成本有护栏。**核心全部自研**（不引 LangChain）。
 
