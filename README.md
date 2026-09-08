@@ -71,7 +71,7 @@ backend/
 │   └── trace/                 # 事件 trace 记录
 ├── tasks/                     # T1~T3 手写任务包（module + 测试 + README，git 作还原点）
 ├── scripts/                   # drive_task/run_all/run_resume_test/measure_*（实测工具）
-├── tests/                     # 125 个单元测试（含真沙箱跑任务包 + GitHub 交付四工具真 git 链路；conftest 隔离临时库，不碰 data/harness.db）
+├── tests/                     # 131 个单元测试（含真沙箱跑任务包 + GitHub 交付四工具真 git 链路；conftest 隔离临时库，不碰 data/harness.db）
 └── pytest.ini                 # 回归只收 tests/，排除任务包"考卷"
 ```
 
@@ -144,3 +144,4 @@ python scripts/drive_task.py t4_github_pipe_escape --model glm-4.5-flash
 | W6~8 | M4：planner 补欠账 + API 一致性 + 打磨（详见 [执行计划_M4.md](docs/执行计划_M4.md)） | ✅ 2026-09-06 收官（B1~B4 + B6a 背靠背 9b151cd/d323d65 + B6b 归档 87cc0f1 + B6c 文档收官；O1-O6 精益优化 78ddfcd，单测 52/52；B5 最简 UI 未做——Q10 余力项，保持待拍板） |
 | W9 | M5：JD 关键词补强——Skills 注册 + MCP（自研 client+demo server）+ 长期记忆（详见 [执行计划_M5.md](docs/执行计划_M5.md)） | ✅ 2026-09-06（Skills/MCP/记忆 29 新测，单测 52→85；真机三开关全开 T1 全绿 run `b5c4a1e61208`，见 [留档报告](docs/m5_smoke_report_2026-09-06.md)；测试 DB 隔离 + 两处 docstring 对齐 85/85；三模块默认关不碰 6/6 基线） |
 | W10 | T4：真实开源库任务（tabulate 反向 bug）真机验证 + GitHub 发布 + CI | ✅ 2026-09-07（13 失败→13 harness 缺陷全修 + 单测 85→110；收官 3 局成功：resume 首胜/全自动 35 步/单段 20 步·11 分钟，见 [T4 战报](docs/t4_real_library_report_2026-09-07.md)；公开仓 VVR823/codecraft-harness，Actions CI ubuntu+py3.13 全绿） |
+| W11 | GitHub 交付模式（对标 MyCoder GitHub mode）：git_branch/commit/push + gh_create_pr 四工具，自修到全绿 → 自修到 PR | ✅ 2026-09-08（`drive_task --github --workspace <clone>`；MED 权限 + HARNESS_GITHUB 环境门闩，基线 run 零影响；真机实证：修复 5/5 绿 → branch fix_csv → commit → push → **真实 PR** [VVR823/codecraft-delivery-demo#1](https://github.com/VVR823/codecraft-delivery-demo/pull/1)（+39/-1）；撞出并修复 Windows git unborn 竞态——三层防线：_head_sha 校验 / update-ref 自修复（含 .lock 清理）/ 失败喂回模型；单测 110→131） |
