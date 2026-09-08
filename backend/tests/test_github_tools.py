@@ -226,7 +226,8 @@ def test_ensure_branch_born_raises_without_base(repo):
 
 
 def test_find_gh_prefers_which(monkeypatch):
-    """gh 定位：PATH 优先；找不到走 GH_BIN；都没有抛 ToolError（不 WinError 裸崩）。"""
+    """gh 定位：PATH 优先（任何名字的 gh 可执行）；找不到走 GH_BIN；都没有抛 ToolError。
+    不强制 .exe 后缀——Linux runner 上 PATH 自带 /usr/bin/gh，没扩展名。"""
     import os
     import tempfile
     from pathlib import Path
@@ -235,7 +236,9 @@ def test_find_gh_prefers_which(monkeypatch):
         with open(gh, "w") as f:
             f.write("")
         monkeypatch.setenv("PATH", td + os.pathsep + os.environ.get("PATH", ""))
-        assert _find_gh().lower().endswith("gh.exe")
+        # 至少返回一个可执行 gh 路径；CI runner 可能优先命中系统 /usr/bin/gh
+        found = _find_gh()
+        assert os.path.basename(found).startswith("gh") and os.access(found, os.X_OK)
     # GH_BIN 指定场景（which 已无命中）
     monkeypatch.delenv("GH_BIN", raising=False)
     with tempfile.TemporaryDirectory() as td:
