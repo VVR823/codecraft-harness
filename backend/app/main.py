@@ -23,6 +23,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import BASE_DIR, DEFAULT_TOKEN_BUDGET, LLM_MODEL
@@ -127,6 +128,12 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="CodeCraft Harness", version="0.1.0", lifespan=lifespan)
 
+# W13 最简 Web 控制台：纯静态单页（原生 JS 轮询 /api/*，不引前端框架）
+# 页面挂 /console，API 路径不动——控制台只是现有 API 的另一种消费方
+_UI_DIR = BASE_DIR / "ui"
+if _UI_DIR.is_dir():
+    app.mount("/console", StaticFiles(directory=str(_UI_DIR), html=True), name="console")
+
 
 class TaskCreate(BaseModel):
     task_id: str                    # 指向 backend/tasks/<task_id>/ 的任务包目录
@@ -145,6 +152,28 @@ class ResumeBody(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "app": "codecraft-harness", "version": "0.1.0"}
+
+
+@app.get("/api/packs")
+def list_packs() -> dict:
+    """任务包清单（UI 下拉）：tasks/ 下含 README.md 的子目录 + 首行摘要。"""
+    packs = []
+    for d in sorted((BASE_DIR / "tasks").iterdir()):
+        if not d.is_dir():
+            continue
+        readme = d / "README.md"
+        if not readme.exists():
+            continue
+        first = readme.read_text(encoding="utf-8").strip().splitlines()
+        desc = first[0].strip() if first else ""
+        packs.append({"task_id": d.name, "desc": desc[:120]})
+    return {"packs": packs}
+
+
+@app.get("/api/runs")
+def list_runs_api(limit: int = 30) -> dict:
+    """run 历史列表（UI 侧栏）：概要字段，详情走 GET /api/tasks/{run_id}。"""
+    return {"runs": [dict(r) for r in db.list_runs(limit=limit)]}
 
 
 @app.post("/api/tasks")
@@ -202,6 +231,9 @@ def get_task(run_id: str) -> dict:
         "last_trace_step": int(last["step"]) if last else None,
         "plan_status": plan["status"] if plan else None,
         "approvals": [dict(a) for a in approvals[-5:]],
+        "recent_traces": [{"step": int(t["step"]), "tool": t["tool"],
+                           "ts": t["ts"], "verdict": t["verdict"]}
+                          for t in traces[-12:]],   # UI 动作时间线（最近 12 步）
     }
 
 

@@ -133,6 +133,19 @@ def get_run(run_id: str) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
 
 
+def list_runs(limit: int = 30) -> list[sqlite3.Row]:
+    """run 列表（UI/审计用）：主表 + 最新 checkpoint 步数 + 累计 token。"""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT r.run_id, r.task_id, r.status, r.created_at, r.updated_at,"
+            "       (SELECT MAX(step) FROM checkpoints c WHERE c.run_id = r.run_id) AS step,"
+            "       (SELECT total_tokens FROM usage u WHERE u.run_id = r.run_id) AS tokens"
+            "  FROM runs r ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return rows
+
+
 # ---------------- checkpoints（Q9 六字段 + ctx_messages） ----------------
 def save_checkpoint(run_id: str, step: int, done_actions: list,
                     ctx_messages: list | None = None, ctx_summary: str = "",

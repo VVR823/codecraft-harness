@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeCraft Harness · 控制台</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2129; --line: #2d333b;
+    --txt: #e6edf3; --dim: #8b949e; --accent: #4c9aff;
+    --ok: #3fb950; --fail: #f85149; --warn: #d29922; --run: #58a6ff;
+    --mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; height: 100vh; overflow: hidden;
+  }
+  .side { width: 340px; min-width: 280px; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .side h1 { font-size: 15px; padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  .side h1 small { color: var(--dim); font-weight: normal; font-size: 11px; display: block; }
+  .form { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+  .form label { font-size: 11px; color: var(--dim); }
+  select, input, button {
+    background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px; font: inherit; outline: none;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+  button { cursor: pointer; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; font-weight: 600; }
+  button.primary:hover { background: #388bfd; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .runs { flex: 1; overflow-y: auto; }
+  .run-item { padding: 9px 16px; border-bottom: 1px solid var(--line); cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .run-item:hover { background: var(--panel2); }
+  .run-item.sel { background: #1f6feb22; border-left: 2px solid var(--accent); }
+  .run-item .rid { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .run-item .task { font-size: 12px; color: var(--dim); }
+  .run-item .meta { font-size: 11px; color: var(--dim); margin-top: 2px; font-family: var(--mono); }
+  .main { flex: 1; overflow-y: auto; padding: 20px 24px; }
+  .hidden { display: none !important; }
+  .empty { color: var(--dim); text-align: center; margin-top: 60px; font-size: 13px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .b-running, .b-pending { background: #58a6ff22; color: var(--run); }
+  .b-done { background: #3fb95022; color: var(--ok); }
+  .b-failed { background: #f8514922; color: var(--fail); }
+  .b-paused, .b-budget_paused { background: #d2992222; color: var(--warn); }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+  .kv .cell { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .kv .k { font-size: 11px; color: var(--dim); }
+  .kv .v { font-size: 18px; font-weight: 700; font-family: var(--mono); }
+  .goal { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--dim); margin-bottom: 14px; white-space: pre-wrap; max-height: 90px; overflow-y: auto; }
+  .timeline { border-left: 2px solid var(--line); margin-left: 6px; padding-left: 16px; }
+  .tl-item { position: relative; padding: 5px 0 9px; }
+  .tl-item::before { content: ""; position: absolute; left: -21px; top: 12px; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .tl-item.v-ok::before { background: var(--ok); }
+  .tl-item.v-fail::before { background: var(--fail); }
+  .tl-item.v-error::before { background: var(--fail); }
+  .tl-item .t { font-family: var(--mono); font-size: 12px; }
+  .tl-item .tool { color: var(--accent); }
+  .tl-item .step { color: var(--dim); font-size: 11px; }
+  .tl-item .verdict { margin-left: 6px; font-size: 12px; color: var(--dim); }
+  .v-ok .verdict { color: var(--ok); } .v-fail .verdict { color: var(--fail); } .v-error .verdict { color: var(--fail); }
+  .actions { margin-top: 16px; display: flex; gap: 10px; }
+  .err { color: var(--fail); font-size: 12px; margin-top: 6px; }
+  .approve-box { background: #d2992218; border: 1px solid #d2992244; border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
+  .approve-box button { margin-left: 8px; }
+  footer { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<aside class="side">
+  <h1>CodeCraft Harness<small>自研 Agent 修复系统 · W13 Web 控制台</small></h1>
+
+  <div class="form">
+    <label for="pack">任务包（goal 自动读任务包 README.md）</label>
+    <select id="pack"><option value="">— 加载中 —</option></select>
+    <label for="goal">目标覆盖（留空 = 任务包默认）</label>
+    <input id="goal" placeholder="可选：自定义 goal">
+    <label for="model">模型（留空 = config 默认 glm-4.5-flash）</label>
+    <input id="model" placeholder="可选：glm-4.5-flash / glm-4-air-250414">
+    <button id="launch" class="primary">▶ 新建任务 run</button>
+    <div id="form-err" class="err"></div>
+  </div>
+
+  <div class="runs" id="runs">
+    <div class="run-item" style="cursor:default;color:var(--dim)">run 历史加载中…</div>
+  </div>
+  <footer id="conn">—</footer>
+</aside>
+
+<main class="main">
+  <div class="empty" id="placeholder">
+    从左侧选一个任务包 → 新建 run，<br>或点历史 run 看回放。
+    <br><br>agent 每步决策（读代码 → 改代码 → 跑测试）都会实时刷在这里。
+  </div>
+
+  <div id="detail" class="hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <h2 id="d-title" style="font-family:var(--mono);font-size:16px"></h2>
+      <span id="d-badge" class="badge"></span>
+    </div>
+    <div class="kv">
+      <div class="cell"><div class="k">任务包</div><div class="v" id="d-task" style="font-size:14px"></div></div>
+      <div class="cell"><div class="k">已执行步数</div><div class="v" id="d-step">0</div></div>
+      <div class="cell"><div class="k">Token</div><div class="v" id="d-tokens">0</div></div>
+      <div class="cell"><div class="k">最后动作</div><div class="v" id="d-last" style="font-size:14px">—</div></div>
+    </div>
+    <div class="goal" id="d-goal"></div>
+    <div id="d-error" class="err"></div>
+    <div class="approve-box hidden" id="d-approve">
+      ⚠ run 因 token 预算超限暂停 —— 需人工批准续跑（审批记录落 approvals 表）。
+      <button id="btn-approve" class="primary">批准续跑</button>
+    </div>
+    <div class="actions">
+      <button id="btn-resume">▶ resume 续跑</button>
+      <button id="btn-refresh">↻ 刷新</button>
+    </div>
+    <h3 style="margin:18px 0 10px;font-size:13px;color:var(--dim)">动作时间线（最近 12 步）</h3>
+    <div class="timeline" id="d-traces">
+      <div style="color:var(--dim);font-size:12px">（尚无 trace——agent 还没开始动作）</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let selRun = null, timer = null, packs = [];
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || ("HTTP " + r.status));
+  return r.json();
+}
+
+/* ---- packs ---- */
+async function loadPacks() {
+  const d = await api("/api/packs");
+  packs = d.packs || [];
+  const sel = $("pack");
+  sel.innerHTML = '<option value="">— 选任务包 —</option>' +
+    packs.map(p => `<option value="${p.task_id}">${p.task_id}</option>`).join("");
+}
+
+/* ---- runs 列表 ---- */
+async function loadRuns() {
+  const d = await api("/api/runs");
+  const box = $("runs");
+  const list = d.runs || [];
+  if (!list.length) { box.innerHTML = '<div class="run-item" style="cursor:default;color:var(--dim)">还没有 run——新建一个</div>'; return; }
+  box.innerHTML = list.map(r => `
+    <div class="run-item ${r.run_id === selRun ? "sel" : ""}" onclick="openRun('${r.run_id}')">
+      <div>
+        <div class="rid">${r.run_id}</div>
+        <div class="task">${r.task_id}</div>
+        <div class="meta">step ${r.step ?? 0} · ${(r.tokens ?? 0).toLocaleString()} tok</div>
+      </div>
+      <span class="badge b-${r.status}">${r.status}</span>
+    </div>`).join("");
+}
+
+/* ---- 详情 + 轮询 ---- */
+async function openRun(runId) {
+  selRun = runId;
+  $("placeholder").classList.add("hidden");
+  $("detail").classList.remove("hidden");
+  clearInterval(timer);
+  await refreshDetail();
+  timer = setInterval(refreshDetail, 2000);
+  loadRuns(); // 侧栏高亮
+}
+
+async function refreshDetail() {
+  if (!selRun) return;
+  try {
+    const d = await api("/api/tasks/" + selRun);
+    $("d-title").textContent = d.run_id;
+    const b = $("d-badge");
+    b.className = "badge b-" + d.status;
+    b.textContent = d.status + (d.active ? " · 执行中" : "");
+    $("d-task").textContent = d.task_id;
+    $("d-step").textContent = d.steps ?? 0;
+    $("d-tokens").textContent = (d.tokens ?? 0).toLocaleString();
+    $("d-last").textContent = d.last_action || "—";
+    $("d-goal").textContent = d.goal ? "goal: " + d.goal.slice(0, 400) : "（无 goal）";
+    $("d-error").textContent = d.error ? "后台错误: " + d.error : "";
+
+    // approve 提示（budget_paused）
+    const ab = $("d-approve");
+    if (d.status === "budget_paused" && !d.active) {
+      ab.classList.remove("hidden");
+      $("btn-approve").onclick = () => resume(true);
+    } else ab.classList.add("hidden");
+
+    // 时间线
+    const tl = $("d-traces");
+    const tr = d.recent_traces || [];
+    if (!tr.length) { tl.innerHTML = '<div style="color:var(--dim);font-size:12px">（尚无 trace）</div>'; }
+    else tl.innerHTML = tr.slice().reverse().map(t => `
+      <div class="tl-item ${t.verdict ? "v-" + t.verdict : ""}">
+        <span class="step">#${t.step}</span>
+        <span class="tool">${t.tool || "agent"}</span>
+        ${t.verdict ? `<span class="verdict">${t.verdict}</span>` : ""}
+      </div>`).join("") +
+      '<div style="color:var(--dim);font-size:11px;margin-top:6px">… 更早的动作见下方 run 的 SQLite trace 存档</div>';
+  } catch (e) {
+    $("d-error").textContent = "刷新失败: " + e.message;
+  }
+}
+
+async function resume(approveBudget) {
+  try {
+    const body = approveBudget ? { approve_budget: true } : {};
+    await api("/api/tasks/" + selRun + "/resume", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await refreshDetail();
+  } catch (e) { $("d-error").textContent = "resume 失败: " + e.message; }
+}
+
+/* ---- 新建 ---- */
+$("launch").onclick = async () => {
+  const task_id = $("pack").value;
+  const err = $("form-err");
+  err.textContent = "";
+  if (!task_id) { err.textContent = "先选一个任务包"; return; }
+  const body = { task_id };
+  if ($("goal").value.trim()) body.goal = $("goal").value.trim();
+  if ($("model").value.trim()) body.model = $("model").value.trim();
+  const btn = $("launch");
+  btn.disabled = true; btn.textContent = "创建中…";
+  try {
+    const d = await api("/api/tasks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    $("goal").value = ""; $("model").value = "";
+    loadRuns();
+    openRun(d.run_id);
+  } catch (e) { err.textContent = "创建失败: " + e.message; }
+  finally { btn.disabled = false; btn.textContent = "▶ 新建任务 run"; }
+};
+$("btn-resume").onclick = () => resume(false);
+$("btn-refresh").onclick = refreshDetail;
+
+/* ---- 启动 ---- */
+(async () => {
+  try {
+    const h = await api("/health");
+    $("conn").textContent = `API OK · ${h.app} v${h.version} · ${new Date().toLocaleTimeString()}`;
+    $("conn").style.color = "var(--ok)";
+  } catch (e) {
+    $("conn").textContent = "API 不可达: " + e.message;
+    $("conn").style.color = "var(--fail)";
+  }
+  try { await loadPacks(); } catch (e) { $("pack").innerHTML = '<option value="">加载失败</option>'; }
+  loadRuns();
+})();
+</script>
+</body>
+</html>
