@@ -71,7 +71,7 @@ backend/
 │   └── trace/                 # 事件 trace 记录
 ├── tasks/                     # T1~T3 手写任务包（module + 测试 + README，git 作还原点）
 ├── scripts/                   # drive_task/run_all/run_resume_test/measure_*（实测工具）
-├── tests/                     # 131 个单元测试（含真沙箱跑任务包 + GitHub 交付四工具真 git 链路；conftest 隔离临时库，不碰 data/harness.db）
+├── tests/                     # 138 个单元测试（含真沙箱跑任务包 + GitHub 交付四工具真 git 链路 + API TestClient；conftest 隔离临时库，不碰 data/harness.db）
 └── pytest.ini                 # 回归只收 tests/，排除任务包"考卷"
 ```
 
@@ -126,6 +126,11 @@ python scripts/drive_task.py t4_github_pipe_escape --model glm-4.5-flash
 echo "ZHIPU_API_KEY=sk-xxx" > .env
 docker compose up -d                                  # FastAPI → http://localhost:8000/health
 docker compose run --rm backend drive t1_single_fix   # CLI 真机任务（一次性）
+
+# 9. Web 控制台（W13：浏览器看 agent 实时修 bug）
+python -m uvicorn app.main:app --port 8000            # 起 API（本地 venv 方式）
+#   → 浏览器开 http://localhost:8000/console
+#   Docker 方式则 docker compose up -d 后同 URL；页面=纯静态单页，零前端依赖
 ```
 
 ## 已知边界（踩坑记录，面试可讲）
@@ -152,3 +157,4 @@ docker compose run --rm backend drive t1_single_fix   # CLI 真机任务（一�
 | W10 | T4：真实开源库任务（tabulate 反向 bug）真机验证 + GitHub 发布 + CI | ✅ 2026-09-07（13 失败→13 harness 缺陷全修 + 单测 85→110；收官 3 局成功：resume 首胜/全自动 35 步/单段 20 步·11 分钟，见 [T4 战报](docs/t4_real_library_report_2026-09-07.md)；公开仓 VVR823/codecraft-harness，Actions CI ubuntu+py3.13 全绿） |
 | W11 | GitHub 交付模式（对标 MyCoder GitHub mode）：git_branch/commit/push + gh_create_pr 四工具，自修到全绿 → 自修到 PR | ✅ 2026-09-08（`drive_task --github --workspace <clone>`；MED 权限 + HARNESS_GITHUB 环境门闩，基线 run 零影响；真机实证：修复 5/5 绿 → branch fix_csv → commit → push → **真实 PR** [VVR823/codecraft-delivery-demo#1](https://github.com/VVR823/codecraft-delivery-demo/pull/1)（+39/-1）；撞出并修复 Windows git unborn 竞态——三层防线：_head_sha 校验 / update-ref 自修复（含 .lock 清理）/ 失败喂回模型；单测 110→131） |
 | W12 | Docker 容器化（发布面补 Docker）：Dockerfile + compose + 双模式 entrypoint | ✅ 2026-09-09（镜像含 .git → API 的 git restore 考卷还原语义容器内完整；data/ 命名卷持久化 run 会话可 resume；密钥零进镜像；CI docker job 背书：build + /health 冒烟 + drive 入口链全绿——本地无 docker 也可靠 CI 验证；单测 131 不动） |
+| W13 | 最简 Web 控制台（M4 B5 补欠账，发布面收官）：纯静态单页消费现有 API | ✅ 2026-09-09（backend/ui/index.html 零前端依赖——原生 fetch 轮询 /api/*；任务包下拉+新建 run+run 历史侧栏+详情（状态徽章/步数/token/最近 12 步动作时间线）+ budget_paused 人工 approve 续跑；后端补 GET /api/packs、GET /api/runs、详情加 recent_traces；db.list_runs 修同秒排序不稳；单测 131→138；uvicorn 冒烟 /console 200 12KB。起法：`uvicorn app.main:app` 后开 http://localhost:8000/console） |
