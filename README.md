@@ -120,6 +120,12 @@ python -m pytest tests/ -q
 
 # 7. T4 真实开源库任务（tabulate 反向 bug，600 行回归测试）
 python scripts/drive_task.py t4_github_pipe_escape --model glm-4.5-flash
+
+# 8. Docker 容器（W12：免本地 venv，起 API 或跑一次性任务）
+#    准备：仓库根建 .env 写 ZHIPU_API_KEY（docker compose 只读根目录 .env，不是 backend/.env）
+echo "ZHIPU_API_KEY=sk-xxx" > .env
+docker compose up -d                                  # FastAPI → http://localhost:8000/health
+docker compose run --rm backend drive t1_single_fix   # CLI 真机任务（一次性）
 ```
 
 ## 已知边界（踩坑记录，面试可讲）
@@ -145,3 +151,4 @@ python scripts/drive_task.py t4_github_pipe_escape --model glm-4.5-flash
 | W9 | M5：JD 关键词补强——Skills 注册 + MCP（自研 client+demo server）+ 长期记忆（详见 [执行计划_M5.md](docs/执行计划_M5.md)） | ✅ 2026-09-06（Skills/MCP/记忆 29 新测，单测 52→85；真机三开关全开 T1 全绿 run `b5c4a1e61208`，见 [留档报告](docs/m5_smoke_report_2026-09-06.md)；测试 DB 隔离 + 两处 docstring 对齐 85/85；三模块默认关不碰 6/6 基线） |
 | W10 | T4：真实开源库任务（tabulate 反向 bug）真机验证 + GitHub 发布 + CI | ✅ 2026-09-07（13 失败→13 harness 缺陷全修 + 单测 85→110；收官 3 局成功：resume 首胜/全自动 35 步/单段 20 步·11 分钟，见 [T4 战报](docs/t4_real_library_report_2026-09-07.md)；公开仓 VVR823/codecraft-harness，Actions CI ubuntu+py3.13 全绿） |
 | W11 | GitHub 交付模式（对标 MyCoder GitHub mode）：git_branch/commit/push + gh_create_pr 四工具，自修到全绿 → 自修到 PR | ✅ 2026-09-08（`drive_task --github --workspace <clone>`；MED 权限 + HARNESS_GITHUB 环境门闩，基线 run 零影响；真机实证：修复 5/5 绿 → branch fix_csv → commit → push → **真实 PR** [VVR823/codecraft-delivery-demo#1](https://github.com/VVR823/codecraft-delivery-demo/pull/1)（+39/-1）；撞出并修复 Windows git unborn 竞态——三层防线：_head_sha 校验 / update-ref 自修复（含 .lock 清理）/ 失败喂回模型；单测 110→131） |
+| W12 | Docker 容器化（发布面补 Docker）：Dockerfile + compose + 双模式 entrypoint | ✅ 2026-09-09（镜像含 .git → API 的 git restore 考卷还原语义容器内完整；data/ 命名卷持久化 run 会话可 resume；密钥零进镜像；CI docker job 背书：build + /health 冒烟 + drive 入口链全绿——本地无 docker 也可靠 CI 验证；单测 131 不动） |
