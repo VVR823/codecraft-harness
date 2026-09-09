@@ -7,10 +7,15 @@ MCP = Model Context Protocol，四层概念：协议层（JSON-RPC 2.0）/ trans
 - 能力发现: tools/list → 返回 [{name, description, inputSchema}]
 - 工具调用: tools/call {name, arguments} → {content:[{type:text, text}]}
 
+帧格式（2026-09-09 真实生态验证驱动升级）：MCP stdio transport 在
+2025-03-26 规范起从「LSP 式 Content-Length 头 + body」改为 **newline-delimited
+JSON**（每行一个 JSON 消息）——官方 SDK server 只认新格式，旧帧会被当行解析
+失败。本实现随官方演进用 jsonl（自研 demo server / 测试 fixture 同步），
+协议演进本身是可讲的点：两种帧都实现过、理解其动机。
+
 设计（延续自研浓度叙事）：
-- 进程生命周期：spawn server 子进程（python -m app.mcp.demo_server），
-  父进程退出自动 terminate（Popen + finally），不留孤儿
-- 消息帧：stdio transport 用"Content-Length 头 + JSON body"（LSP 同款帧协议）
+- 进程生命周期：spawn server 子进程（python -m app.mcp.demo_server 或官方
+  server），父进程退出自动 terminate（Popen + finally），不留孤儿
 - 无第三方依赖：json / subprocess / threading 即可
 - 生产换官方 SDK 是半小时的事，但协议理解不依赖 SDK——这是面试可讲的点
 """
@@ -23,10 +28,9 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-# stdio 帧协议（与 LSP 一致）：headers 空行 + JSON body
+# stdio 帧：newline-delimited JSON（MCP 2025-03-26+ 规范）
 def _encode(msg: dict) -> bytes:
-    body = json.dumps(msg).encode("utf-8")
-    return f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+    return json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
 
 
 class MCPError(Exception):
@@ -110,7 +114,14 @@ class MCPClient:
             with self._lock:
                 self.proc.stdin.write(_encode(req))
                 self.proc.stdin.flush()
-                resp = self._read_response()
+                while True:
+                    resp = self._read_response()
+                    # 跳过 server 主动推送的通知帧（JSON-RPC 无 id，如
+                    # notifications/tools/list_changed）——直到读到本请求的响应
+                    # （2026-09-09 官方 server 对接实证：everything 握手后会推
+                    # list_changed，旧实现把它当响应读 → tools/list 得空）
+                    if resp.get("id") == self._req_id:
+                        break
         except (BrokenPipeError, OSError) as e:
             raise MCPError(f"MCP server {self.server_name} 通信失败: {e}") from e
         if "error" in resp:
@@ -159,25 +170,20 @@ class MCPClient:
         return got
 
     def _read_response(self) -> dict:
-        """读一帧：Content-Length 头 → body。超时保护（真实现，见 _timed_read）。"""
-        headers: dict[str, str] = {}
-        while True:
-            line = self._timed_read(self.proc.stdout.readline, "响应头",
-                                    self.read_timeout)
-            if not line:
-                raise MCPError(f"MCP server {self.server_name} 提前退出")
-            line = line.decode("utf-8", errors="replace").strip()
-            if not line:
-                break
-            key, _, value = line.partition(":")
-            headers[key.strip().lower()] = value.strip()
-        length = int(headers.get("content-length", "0"))
-        body = self._timed_read(lambda: self.proc.stdout.read(length), "响应体",
+        """读一帧：jsonl 一行 = 一个 JSON 消息。超时保护（真实现，见 _timed_read）。"""
+        line = self._timed_read(self.proc.stdout.readline, "响应",
                                 self.read_timeout)
-        if len(body) < length:
+        if not line:
+            raise MCPError(f"MCP server {self.server_name} 提前退出")
+        text = line.decode("utf-8", errors="replace").strip()
+        if not text:
+            # 空行不该出现在 jsonl 帧流里——当协议异常处理（防死循环）
+            raise MCPError(f"MCP server {self.server_name} 返回空行（帧协议异常）")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
             raise MCPError(
-                f"MCP server {self.server_name} 提前退出（body 不完整）")
-        return json.loads(body.decode("utf-8", errors="replace"))
+                f"MCP server {self.server_name} 返回非法 JSON 帧: {e} | {text[:200]}") from e
 
     # ---------- MCP 能力 ----------
     def list_tools(self) -> list[MCPTool]:

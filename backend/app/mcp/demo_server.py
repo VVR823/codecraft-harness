@@ -5,7 +5,7 @@ SQLite 查询（SELECT），供 agent 当"外部数据源"调用。权限上对�
 只读、路径白名单、绝不写库——这是 MCP server 侧的安全自述（可审计）。
 
 协议实现（与 mcp_client 对称）：
-- stdio 帧：Content-Length 头 + JSON body
+- stdio 帧：newline-delimited JSON（MCP 2025-03-26+ 规范，每行一个 JSON）
 - 处理 initialize → 回 capabilities；tools/list → 工具清单；tools/call → 执行
 
 用法：python -m app.mcp.demo_server（被 client spawn，也可手动起测）
@@ -41,27 +41,18 @@ _TOOLS = [
 
 
 def _read_frame() -> dict | None:
-    headers: dict[str, str] = {}
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            return None  # EOF：client 关闭
-        line = line.rstrip("\r\n")
-        if not line:
-            break
-        key, _, value = line.partition(":")
-        headers[key.strip().lower()] = value.strip()
-    length = int(headers.get("content-length", "0"))
-    body = sys.stdin.read(length)
-    if not body.strip():
+    """读一帧：jsonl 一行 = 一个 JSON 消息（MCP 2025-03-26+ stdio 帧格式）。"""
+    line = sys.stdin.readline()
+    if not line:
+        return None  # EOF：client 关闭
+    line = line.strip()
+    if not line:
         return None
-    return json.loads(body)
+    return json.loads(line)
 
 
 def _write_frame(msg: dict) -> None:
-    body = json.dumps(msg).encode("utf-8")
-    sys.stdout.write(f"Content-Length: {len(body)}\r\n\r\n")
-    sys.stdout.write(body.decode("utf-8"))
+    sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
     sys.stdout.flush()
 
 

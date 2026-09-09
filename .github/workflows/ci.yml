@@ -27,6 +27,14 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/ -q
 
+      - name: Verify MCP against official server (real ecosystem)
+        run: |
+          # 自研 MCP client 对接官方 @modelcontextprotocol/server-everything
+          # 全链验证（initialize → tools/list → tools/call）——生态兼容由 CI 背书
+          node --version
+          npm install --prefix .mcp-verify @modelcontextprotocol/server-everything
+          python scripts/verify_mcp_real.py
+
   docker:
     runs-on: ubuntu-latest
     steps:

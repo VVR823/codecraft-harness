@@ -9,6 +9,8 @@
 配套文档：[执行计划 v2.2](docs/执行计划_v2.2.md)（grill 三轮拷问定稿，15 项决策有出处）·
 [业界对标调研](docs/业界对标调研.md)（MyCoder/MiniCode/OpenHands/LangGraph 逐能力项对照，含面试话术速查）。
 
+License: [MIT](LICENSE)（作者 文宇）
+
 ## 硬数字（2026-09-04~05 实测）
 
 **数字① 回归通过率：6/6 全绿**（**免费** `glm-4.5-flash` × 3 任务 × 2 次，run_all 自愈重试≤2，详见 [报告](docs/run_all_report_free_2026-09-04.md)）

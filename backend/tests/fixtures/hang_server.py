@@ -9,25 +9,19 @@ import time
 
 
 def read_frame():
-    headers = {}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        line = line.decode("utf-8", errors="replace").strip()
-        if not line:
-            break
-        key, _, value = line.partition(":")
-        headers[key.strip().lower()] = value.strip()
-    length = int(headers.get("content-length", "0") or 0)
-    body = sys.stdin.buffer.read(length) if length else b""
-    return json.loads(body.decode("utf-8", errors="replace")) if body else None
+    """读一帧：jsonl 一行 = 一个 JSON（与 client/demo_server 同帧格式）。"""
+    line = sys.stdin.buffer.readline()
+    if not line:
+        return None
+    text = line.decode("utf-8", errors="replace").strip()
+    if not text:
+        return None
+    return json.loads(text)
 
 
 def send(obj):
-    body = json.dumps(obj).encode("utf-8")
     sys.stdout.buffer.write(
-        f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+        json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
     sys.stdout.buffer.flush()
 
 

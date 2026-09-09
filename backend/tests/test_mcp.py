@@ -120,6 +120,28 @@ def test_start_recovers_after_broken():
     c.stop()
 
 
+# ---------- 服务端主动推送通知帧（W14 官方 server 对接实证） ----------
+
+def test_client_skips_server_push_notifications():
+    """server 响应前先推 notifications/tools/list_changed → client 须跳帧等真响应。
+
+    2026-09-09 官方 everything server 对接暴露：旧实现把推送帧当 tools/list
+    响应读（无 id 无 result）→ 拿到 0 工具。修复 = 循环读到 id 匹配才返回。
+    """
+    py = sys.executable
+    server_py = Path(__file__).resolve().parent / "fixtures" / "notify_server.py"
+    c = MCPClient("notify", [py, str(server_py)], read_timeout=5.0)
+    try:
+        c.start()
+        tools = c.list_tools()  # server 先推通知帧再回真响应
+        names = [t.name for t in tools]
+        assert "ping" in names, f"跳帧失败：tools/list 拿到 {names}（被通知帧截胡）"
+        out = c.call_tool("ping", {"msg": "hi"})
+        assert out.strip() == "pong:hi"
+    finally:
+        c.stop()
+
+
 # ---------- 协议放行（mcp_ 前缀） ----------
 
 def test_protocol_allows_mcp_prefix_tool():
