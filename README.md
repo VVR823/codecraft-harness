@@ -144,6 +144,8 @@ python -m uvicorn app.main:app --port 8000            # 起 API（本地 venv �
 - **M5 Skills 示例内容与 system 规则重叠（诚实口径）**：内置示例 `pytest-green` 的指引（edit_file 优先/写完必跑测试/不改测试）在 system prompt 已有——所以"加了 skill 行为应没差"。这不是机制缺陷：**机制（SKILL.md 注册/发现/按 goal 匹配/注入）才是要讲的点，内容只是教学示例**。像 Anthropic Skills 那样真正改变行为的是"领域专有方法"（某类 bug 的排查套路），属后续可扩展方向。
 - **M5 MCP demo 工具无任务相关性（诚实口径）**：`sqlite_query` 查的是 harness 自己的运行库——对一个修代码的 agent 没有任务价值，**只演示 capability**（协议自研/动态注册/权限对齐）。不包装成"agent 通过 MCP 获取任务关键数据"。
 - **M5 记忆无 A/B 硬数字（诚实口径）**：planner 有 measure_plan A/B，记忆没有"有/无记忆第二次跑的 token/步差"对比——M5 定位是关键词补强不是新硬数字。价值主张是**经验防重踩**（机制可指 distill/render 代码 + 同 kind 去重/上限），**不报省多少**；若要硬数字需另立评测。
+- **沙箱隔离边界（诚实口径）**：执行隔离是"任务包复制到临时目录 + 子进程隔离"的**轻量进程级沙箱**——防 AI 折腾污染源任务包，但**不是容器级安全边界**（子进程仍可访问宿主文件系统/网络；工具层靠 LOW/MED/HIGH 权限分级 + 审批拦截兜恶意操作）。W12 的 Docker 化是**部署形态**不是沙箱后端。个人工具/单机场景此边界够用；上生产多租户需容器沙箱（OpenHands 式），属明确未做项——面试被问"AI 乱跑怎么办"的完整口径：工具权限分级 → 复制隔离 → 审批流，三层都在且可指代码。
+- **MCP 生态兼容已真实验证（2026-09-09）**：自研 client 对接官方 server-everything 全链通过（见 W14）；过程中暴露并修复两个真 bug——stdio 帧格式随 2025-03-26 规范从 Content-Length 改为 newline JSON、server 主动推送的通知帧需跳过。CI 现含官方 server 对接步骤，生态兼容由 CI 背书。
 
 ## 里程碑进度
 
@@ -160,3 +162,4 @@ python -m uvicorn app.main:app --port 8000            # 起 API（本地 venv �
 | W11 | GitHub 交付模式（对标 MyCoder GitHub mode）：git_branch/commit/push + gh_create_pr 四工具，自修到全绿 → 自修到 PR | ✅ 2026-09-08（`drive_task --github --workspace <clone>`；MED 权限 + HARNESS_GITHUB 环境门闩，基线 run 零影响；真机实证：修复 5/5 绿 → branch fix_csv → commit → push → **真实 PR** [VVR823/codecraft-delivery-demo#1](https://github.com/VVR823/codecraft-delivery-demo/pull/1)（+39/-1）；撞出并修复 Windows git unborn 竞态——三层防线：_head_sha 校验 / update-ref 自修复（含 .lock 清理）/ 失败喂回模型；单测 110→131） |
 | W12 | Docker 容器化（发布面补 Docker）：Dockerfile + compose + 双模式 entrypoint | ✅ 2026-09-09（镜像含 .git → API 的 git restore 考卷还原语义容器内完整；data/ 命名卷持久化 run 会话可 resume；密钥零进镜像；CI docker job 背书：build + /health 冒烟 + drive 入口链全绿——本地无 docker 也可靠 CI 验证；单测 131 不动） |
 | W13 | 最简 Web 控制台（M4 B5 补欠账，发布面收官）：纯静态单页消费现有 API | ✅ 2026-09-09（backend/ui/index.html 零前端依赖——原生 fetch 轮询 /api/*；任务包下拉+新建 run+run 历史侧栏+详情（状态徽章/步数/token/最近 12 步动作时间线）+ budget_paused 人工 approve 续跑；后端补 GET /api/packs、GET /api/runs、详情加 recent_traces；db.list_runs 修同秒排序不稳；单测 131→138；uvicorn 冒烟 /console 200 12KB。起法：`uvicorn app.main:app` 后开 http://localhost:8000/console） |
+| W14 | MCP 真实生态验证 + 规范件收官：自研 client 对接官方 server | ✅ 2026-09-09（scripts/verify_mcp_real.py spawn 官方 server-everything，initialize→tools/list 13 工具→echo→get-sum=42 全链通；**挖出并修复两真 bug**：stdio 帧 2025-03-26 规范改 newline JSON（三处同步）+ server 推送通知帧需跳帧（notify_server fixture 回归测试）；CI test job 加官方对接步骤背书；MIT LICENSE + frontend 空壳清理；单测 138→139） |
