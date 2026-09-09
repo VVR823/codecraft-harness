@@ -1,0 +1,22 @@
+# CodeCraft Harness 一键编排
+#   起 API 服务：    docker compose up -d          → http://localhost:8000/health
+#   跑 CLI 真机任务：docker compose run --rm backend drive t1_single_fix
+#
+# 环境变量：仓库根 .env（或 shell export）里给 ZHIPU_API_KEY
+#   例：echo "ZHIPU_API_KEY=sk-xxx" > .env && docker compose up -d
+#
+# data/ 用命名卷持久化：harness.db + run 会话跨容器存活，stop/up 不丢历史、可 resume
+
+services:
+  backend:
+    build: .
+    image: codecraft-harness:local
+    ports:
+      - "8000:8000"
+    environment:
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
+    volumes:
+      - harness_data:/app/backend/data
+
+volumes:
+  harness_data:

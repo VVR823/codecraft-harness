@@ -26,3 +26,25 @@ jobs:
 
       - name: Run unit tests
         run: python -m pytest tests/ -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t codecraft-harness:ci .
+
+      - name: Smoke test — health endpoint
+        run: |
+          docker run -d --name cc-harness -p 8000:8000 codecraft-harness:ci
+          sleep 8
+          curl -fsS http://localhost:8000/health
+          docker stop cc-harness
+
+      - name: Smoke test — drive mode entry chain
+        run: |
+          # 验证 `drive` 模式入口链（entrypoint → scripts/drive_task.py argparse）
+          # argparse --help 合法退出码 0，不真烧 LLM token
+          docker run --rm codecraft-harness:ci drive --help
+

@@ -1,0 +1,27 @@
+# 容器镜像排除清单（对照 backend/.gitignore 语义 + 镜像瘦身）
+# 密钥与本地产物永不进镜像；.git 保留（git restore 考卷还原语义依赖它）
+
+# Python 缓存
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.venv
+venv/
+
+# 本地数据产物（harness.db / 真机报告 / delivery 本地仓库）——compose 用 volume 挂载
+backend/data
+
+# 密钥
+backend/.env
+.env
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 文档类不参与运行时（README/docs 保留也行，但为减层数排除体积大头）
+*.db-wal
+*.db-shm
