@@ -76,6 +76,6 @@
 
 ## 达标边界
 
-已实现并验证本机适用的工程要求，交付路径为源码自部署应用、离线体验、只读案例和可核查评测。Docker运行与本地Linux Python门禁已追加实测；云CI、Linux官方Node/MCP复验、真实GitHub交付与公网发布未执行，其中发布和远端不是本轮要求。Windows历史链接SKIP保留且Linux已补实测，模型效果限制继续保留，不做“所有环境全部通过”声明。
+已实现并验证本机适用的工程要求，交付路径为源码自部署应用、离线体验、只读案例和可核查评测。Docker运行与本地Linux Python门禁已追加实测；经用户追加授权，公开源码和 GitHub Pages 案例页已发布，Windows/Linux/Docker 云 CI 已运行；最新实际结论见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)和[交付入口](cloud-publication-2026-10-21.md)。GitHub PR 交付工具的真实远端验收仍未执行。Windows历史链接SKIP保留且Linux已补实测，模型效果限制继续保留，不做“所有环境全部通过”声明。
 
 该结论不等于生产级恶意代码隔离、任意模型稳定修复或求职者已掌握所有模块。当前同配置T1/T2/T3小集合各一次均有成功及独立补丁复验，旧不同模型/源码记录另行保留；稳定成功率、任意任务和其他硬件上的效果仍未证明。没有为补关键词扩展多Agent、分布式队列、GraphRAG或其他项目。

@@ -9,8 +9,8 @@
       "bytes": 17
     },
     ".github/workflows/ci.yml": {
-      "sha256": "b017291c7b8665ea8d4e72b7aa0efb91e07be33b7ce45e7cd2d1e60a1f7da407",
-      "bytes": 1362
+      "sha256": "9f479e756d8c6673a99fcbf0aaa2512c13602346b9570348265dbbedfc1bd257",
+      "bytes": 1392
     },
     ".gitignore": {
       "sha256": "6ae6ff5dab04f527c3cc6d4388f1c0813f4e14a471b5ae833bda38ced40a1369",
@@ -537,8 +537,8 @@
       "bytes": 1218
     },
     "docs/acceptance.md": {
-      "sha256": "3d65bb1401cc34acfb411699d2f68c881b22c76894c178951ff8bc2e02c56e38",
-      "bytes": 12042
+      "sha256": "23581e533d610c6ffe22d84e96ba37e1d708c4a24125b060836680d08cfc1a66",
+      "bytes": 12165
     },
     "docs/architecture.md": {
       "sha256": "505d709650d617bc2ec2e08f0b0a7f78a4cb9bf0a7c7321768a32be337f6cede",
@@ -657,8 +657,8 @@
       "bytes": 1071
     },
     "README.md": {
-      "sha256": "639832419f93d4800ec067e3ee0a14e38cc4285736af502511fed7368172ee45",
-      "bytes": 6172
+      "sha256": "65448625705f7da8b9bf42b8bd1826410089fe0343284ee6ac4f0dc8588f2850",
+      "bytes": 6557
     },
     "showcase/app.js": {
       "sha256": "8bb3cbd28f8ed339a8e929a9385978e949fd2a6ede72fab58cf43a0e8649074d",
@@ -687,6 +687,10 @@
     ".dockerignore": {
       "sha256": "adb2d7bb437bc1c0cd47ae078d9d97993d281f4313e68f7d9cd63d573d627551",
       "bytes": 765
+    },
+    "docs/cloud-publication-2026-10-21.md": {
+      "sha256": "de6c9663e153592add10ab5ed716e36c50b7b09fc2e25ca56a45ba8d4c613aac",
+      "bytes": 1940
     }
   },
   "excluded": [

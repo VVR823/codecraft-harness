@@ -8,6 +8,7 @@ jobs:
     env:
       CODECRAFT_MODE: offline_demo
       CODECRAFT_ALLOW_REMOTE: 'false'
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:

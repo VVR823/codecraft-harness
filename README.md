@@ -38,7 +38,7 @@
    .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
    ```
 
-   浏览器访问 `http://127.0.0.1:8000/console/`，提交任务、查看trace、下载结果。历史记录刷新不会重复创建任务。Linux使用 `python3.13 -m venv .venv` 和 `.venv/bin/python`；本地Linux容器已通过Python质量门禁，云端CI尚未触发。
+   浏览器访问 `http://127.0.0.1:8000/console/`，提交任务、查看trace、下载结果。历史记录刷新不会重复创建任务。Linux使用 `python3.13 -m venv .venv` 和 `.venv/bin/python`；本地Linux容器已通过Python质量门禁，云端 CI 由 GitHub Actions 持续验证，实际状态见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)。
 
 已有 uv 的开发者可在backend执行 `uv sync --locked --group dev`。当前主要依赖已经锁定，版本与哈希以 `uv.lock` 为准。
 
@@ -62,6 +62,7 @@
 | [低内存本地模型](docs/low-memory-local-model.md) | 复用已有7B权重，启动CPU服务、检查加载、显式验收及退出 |
 | [架构说明](docs/architecture.md) | 执行循环、工作区、事务窗口、预算及取舍 |
 | [测试说明](docs/testing.md) | 本地门禁、评测命令、故障回归与证据边界 |
+| [云端验证与发布](docs/cloud-publication-2026-10-21.md) | 公网案例页、源码和云 CI 入口 |
 | [本轮交付记录](docs/delivery-2026-10-19.md) | 实际检查、未执行项、审查结果 |
 | [原计划逐项验收](docs/acceptance.md) | 22项原始验收条件、证据与环境限制 |
 | [静态案例](showcase/README.md) | 独立只读网页，不连接任务API |
@@ -73,7 +74,7 @@
 
 测试会执行Python代码，只用于可信源码。复制目录、冻结测试、环境白名单和进程树超时清理能减少误操作，无法隔离恶意代码或阻断其网络访问。默认单worker、本机监听、最多2个并行run；不作为多租户或匿名SaaS部署。
 
-真实模型修复产物与run完成状态分别记录，不承诺任意模型或任务都能成功。已实测Docker构建/持久卷重建和本地Linux Python门禁；未调用远端模型、触发云端CI、执行真实GitHub交付或公网发布。容器离线演示不算真实模型成绩，具体范围见逐项验收。九月报告是历史证据，原数据不覆盖；优化前 README（保留在本地历史归档中）仅供历史追溯。
+真实模型修复产物与run完成状态分别记录，不承诺任意模型或任务都能成功。已实测Docker构建/持久卷重建和本地Linux Python门禁；此次未调用远端模型；公开源码和静态案例页已经发布。云 CI 实际状态见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)；GitHub PR 交付工具的真实远端验收仍未执行。容器离线演示不算真实模型成绩，具体范围见逐项验收。九月报告是历史证据，原数据不覆盖；优化前 README（保留在本地历史归档中）仅供历史追溯。
 
 MIT License，见 [LICENSE](LICENSE)。
 
