@@ -683,6 +683,10 @@
     "showcase/view.mjs": {
       "sha256": "dd41cf196cded25bdffa099aad09c9f40c6dd244ae24cebaa50abadf4ed2773d",
       "bytes": 310
+    },
+    ".dockerignore": {
+      "sha256": "adb2d7bb437bc1c0cd47ae078d9d97993d281f4313e68f7d9cd63d573d627551",
+      "bytes": 765
     }
   },
   "excluded": [
