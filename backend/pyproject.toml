@@ -1,0 +1,47 @@
+[project]
+name = "codecraft-harness"
+version = "0.2.0"
+description = "Single-agent code repair harness with durable evidence"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi>=0.141,<1", "uvicorn[standard]>=0.52,<1", "pydantic>=2.13,<3",
+  "pytest>=9.1,<10", "httpx>=0.28,<1", "python-dotenv>=1.2,<2",
+  "openai>=3.35,<4", "jsonschema>=4.26,<5",
+]
+
+[dependency-groups]
+dev = ["ruff", "mypy", "pytest-cov", "types-jsonschema"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py313"
+line-length = 110
+include = ["app/**/*.py", "scripts/*.py", "tests/*.py"]
+exclude = ["tasks", ".mcp-verify", "data"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"tests/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["app/runtime/settings.py", "app/runtime/model_client.py", "app/runtime/execution_lock.py", "app/runtime/run_service.py", "app/runtime/workspace.py", "app/runtime/usage.py", "app/runtime/demo.py", "app/store/db.py", "app/store/migrations.py", "app/main.py", "app/api_security.py", "app/logging_config.py", "app/bench.py", "app/export_run.py"]
+check_untyped_defs = true
+warn_unused_ignores = true
+follow_imports = "silent"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 2
+fail_under = 85.91365023986044

@@ -1,0 +1,13 @@
+.cache/
+.superpowers/
+__pycache__/
+*.pyc
+.venv/
+.env
+.coverage*
+htmlcov/
+backend/*.egg-info/
+
+**/coverage.json
+**/.ruff_cache/
+**/.mypy_cache/
