@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "git_revision": "5b05f04 + working tree",
+  "evidence_note": "3个离线固定案例与4个历史真实模型记录分别标注；3次单项正常完成及1次预算暂停均保留，模型和源码版本分别注明，不计算合并成功率",
+  "cases": [
+    {
+      "title": "T1 · 字符串空白修复",
+      "evidence_kind": "offline_demo",
+      "summary": "原函数只移除空格，遇到制表符和换行仍残留。脚本展示从失败测试到最小修改再验证的过程。",
+      "timeline": [
+        "运行原始测试，暴露空白字符失败",
+        "读取utils.py",
+        "精准替换strip参数",
+        "冻结原测试再次验证",
+        "保存动作、trace和断点，验证后done"
+      ],
+      "patch": "- return text.strip(\" \")\n+ return text.strip()",
+      "tests": "2 passed；测试来源保持不变。"
+    },
+    {
+      "title": "T2 · 补全z-score",
+      "evidence_kind": "offline_demo",
+      "summary": "补全空序列、常数序列和总体标准差处理；原始测试不能通过写工具修改。",
+      "timeline": [
+        "原函数抛NotImplementedError",
+        "读取module.py",
+        "补全均值、总体标准差与边界分支",
+        "4个冻结测试通过"
+      ],
+      "patch": "mean = sum(values) / len(values)\nstd = (sum((x - mean) ** 2 for x in values) / len(values)) ** 0.5\nreturn [(x - mean) / std for x in values] if std else [0.0] * len(values)",
+      "tests": "4 passed；空序列单独返回[]。"
+    },
+    {
+      "title": "T3 · 跨文件折扣边界",
+      "evidence_kind": "offline_demo",
+      "summary": "订单结算调用定价模块，满3件应享受折扣。固定脚本将严格大于改为大于等于，验证订单侧行为。",
+      "timeline": [
+        "订单测试暴露满3件边界失败",
+        "读取pricing.py",
+        "修正折扣阈值",
+        "验证order.py调用链"
+      ],
+      "patch": "- return BULK_RATE if qty > BULK_THRESHOLD else 1.0\n+ return BULK_RATE if qty >= BULK_THRESHOLD else 1.0",
+      "tests": "5 passed；覆盖单行与混合订单。"
+    },
+    {
+      "title": "真实T1 · 修复产物通过，任务预算暂停",
+      "evidence_kind": "historical_real",
+      "summary": "2026-10-20已有qwen2.5:3b本地实跑，run fa5b727df3ef。第3步修复实现，第4步原测试全绿；随后重复写入和测试，最终budget_paused、verified=false。17.482秒，11次已结算请求，22286已知token、0未知；请求间预算阈值20000。此记录不作为完整任务成功。",
+      "timeline": [
+        "初测1通过、1失败，读取utils.py",
+        "第3步模型准确编辑实现为text.strip()",
+        "第4步原2测试通过，测试基线完整",
+        "随后重复写入和测试，达到预算后停止下一次请求",
+        "最终文件独立核对仍2通过；保留271字节补丁，不改写run状态"
+      ],
+      "patch": "- return text.strip(\" \")  # bug: 只去空格，不去制表符/换行\n+ return text.strip()",
+      "tests": "最终产物2 passed；完整run仍budget_paused/verified=false。证据见docs/local-acceptance-2026-10-20.md，源码SHA256 efcc16ad984b3460995eba19ad35d8c33c90f509e793e728ff1b07c7679a6caf。"
+    },
+    {
+      "title": "真实T1 · 预算内正常完成",
+      "evidence_kind": "historical_real",
+      "summary": "2026-10-20本机已有qwen2.5:3b，run 2e7d7bf6a83b。正式验收done/verified=true、原2项测试通过。10.191秒，6次已结算请求，11181 token、0未知，低于20000预算。仅证明此次T1通过；之前失败记录保留。",
+      "timeline": [
+        "原任务初测1通过、1失败",
+        "模型读取utils.py并修复strip参数",
+        "原2项冻结测试通过，任务正常结束",
+        "只读核对账本、测试基线与断点，均一致",
+        "独立复核：原副本仍失败；导出补丁直接应用后2项通过，无手工补改"
+      ],
+      "patch": "- return text.strip(\" \")\n+ return text.strip()",
+      "tests": "done/verified=true；原2项测试通过。独立补丁重放也2 passed，原始任务与旧run未改动。证据见docs/local-acceptance-2026-10-20.md；源码SHA256 e261626efcc6af88b0874cb21732313ca0dfca302bb67844d86761ea7ded0d08。"
+    },
+    {
+      "title": "真实T2 · 低内存7B补全函数",
+      "evidence_kind": "historical_real",
+      "summary": "2026-10-20，qwen2.5-7b-cpu-norepack，llama-server CPU（关闭权重重排），run fa828cc35d24。done/verified=true；原4项测试通过。120.649秒，7798已知token、0未知，原预算20000，无重试或扩额。只证明这一源码与配置下本次任务成功，不与其他模型或版本合并为全套通过。",
+      "timeline": [
+        "原4项测试全部失败，模型读取module.py",
+        "模型用write_file补全空序列、总体标准差及常数序列分支",
+        "原4项冻结测试通过，正常done；没有修改测试或扩额",
+        "核对账本、基线和断点；导出补丁直接应用到全新副本也4项通过",
+        "保留原样补丁：模型删除了顶部任务说明，不另行手工恢复或美化"
+      ],
+      "patch": "--- a/module.py\n+++ b/module.py\n@@ -1,8 +1,3 @@\n-\"\"\"z-score 标准化函数（唯一函数）。\n-\n-当前实现被清空（抛 NotImplementedError），依赖它的测试全红。\n-你的任务：补全 zscore 的实现。文件里只有这一个函数，整文件覆盖是安全的。\n-\"\"\"\n from __future__ import annotations\n \n \n@@ -15,4 +10,10 @@\n     - 序列全相等（std == 0）时返回长度相同的全 0.0 列表\n     - 被清空的函数：当前只抛异常（bug 所在）\n     \"\"\"\n-    raise NotImplementedError(\"zscore 待实现\")\n+    if not values:\n+        return []\n+    mean = sum(values) / len(values)\n+    std = (sum((x - mean) ** 2 for x in values) / len(values)) ** 0.5\n+    if std == 0.0:\n+        return [0.0] * len(values)\n+    return [(x - mean) / std for x in values]\n",
+      "tests": "done/verified=true；原4项冻结测试通过。全新副本直接应用导出补丁，4FAIL→4PASS，没有手工补码。源码SHA256 bd7bd7cedf1e75e317366d04910ad1764f2f8f7cacb9713cc85e6217e07aec8c。",
+      "provenance": {
+        "run_id": "fa828cc35d24",
+        "task_id": "t2_missing_fn",
+        "git_revision": "5b05f04ef8c105764a5f6e295ee1f67b2af4b054",
+        "source_sha256": "bd7bd7cedf1e75e317366d04910ad1764f2f8f7cacb9713cc85e6217e07aec8c",
+        "options": {
+          "mode": "local",
+          "model": "qwen2.5-7b-cpu-norepack",
+          "token_budget": 20000,
+          "context_compress": false,
+          "structured_output": true,
+          "keep_recent_steps": 3,
+          "use_plan": false,
+          "use_skills": false,
+          "use_mcp": false,
+          "use_memory": false,
+          "use_github": false
+        },
+        "duration_s": 120.649,
+        "known_tokens": 7798,
+        "unknown_calls": 0,
+        "tool_calls": 4,
+        "patch_sha256": "d4df0307cb82d76bac00ec9e6030ae4c0304e1f5e1593cfd53f2c6d182742a4e",
+        "independent_patch_replay": true
+      }
+    },
+    {
+      "title": "真实T3 · 代码3B修复跨文件折扣边界",
+      "evidence_kind": "historical_real",
+      "summary": "2026-10-20，qwen2.5-coder:3b，Ollama本地代码模型，run 50bb3290f009。done/verified=true；原5项测试通过。4.355秒，7158已知token、0未知，原预算20000，无重试或扩额。只证明这一源码与配置下本次任务成功，不与其他模型或版本合并为全套通过。",
+      "timeline": [
+        "原订单测试2通过、3失败，暴露批量折扣边界",
+        "模型读取pricing.py，使用包含整条return的唯一片段修改边界",
+        "原5项冻结测试通过，正常done；未改测试或放宽匹配",
+        "核对原始记录；全新源副本应用导出补丁后5项通过"
+      ],
+      "patch": "--- a/pricing.py\n+++ b/pricing.py\n@@ -13,4 +13,4 @@\n \n     bug：当前写成 qty > BULK_THRESHOLD，等于阈值时不打折。\n     \"\"\"\n-    return BULK_RATE if qty > BULK_THRESHOLD else 1.0\n+    return BULK_RATE if qty >= BULK_THRESHOLD else 1.0\n",
+      "tests": "done/verified=true；原5项冻结测试通过。全新副本直接应用导出补丁，2PASS/3FAIL→5PASS，没有手工补码。源码SHA256 2b1f0f40b241b3978eb76407f00deb17c39225862f394061ae17e85cf9192ce5。",
+      "provenance": {
+        "run_id": "50bb3290f009",
+        "task_id": "t3_cross_file",
+        "git_revision": "5b05f04ef8c105764a5f6e295ee1f67b2af4b054",
+        "source_sha256": "2b1f0f40b241b3978eb76407f00deb17c39225862f394061ae17e85cf9192ce5",
+        "options": {
+          "mode": "local",
+          "model": "qwen2.5-coder:3b",
+          "token_budget": 20000,
+          "context_compress": false,
+          "structured_output": true,
+          "keep_recent_steps": 3,
+          "use_plan": false,
+          "use_skills": false,
+          "use_mcp": false,
+          "use_memory": false,
+          "use_github": false
+        },
+        "duration_s": 4.355,
+        "known_tokens": 7158,
+        "unknown_calls": 0,
+        "tool_calls": 4,
+        "patch_sha256": "73e37c63fa756b2124ebc708a138cf39832aa2d0aebb7c942d747914fc87f354",
+        "independent_patch_replay": true
+      }
+    }
+  ]
+}
