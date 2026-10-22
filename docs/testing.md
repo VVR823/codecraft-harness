@@ -1,8 +1,10 @@
 # CodeCraft验证方式与证据
 
-所有核心回归使用临时数据库、私有工作区、固定决策器或模型MockTransport，质量门禁不调用模型。后续单独授权的本地模型尝试见[真实验收](local-acceptance-2026-10-20.md)；未执行远端模型、GitHub提交/推送/PR或公网发布。离线演示与真实模型评测必须分开解读。
+所有核心回归使用临时数据库、私有工作区、固定决策器或模型MockTransport，质量门禁不调用模型。后续单独授权的本地模型尝试见[真实验收](local-acceptance-2026-10-20.md)；历史公开源码/静态页与云CI见[公开交付](cloud-publication-2026-10-21.md)。本轮未调用远端模型；修复随本次源码更新同步。离线演示与真实模型评测必须分开解读。
 
-2026-10-21最新Linux门禁：在源码白名单副本和独立Linux卷执行scripts/check.py，287PASS/0SKIP、45.91秒、覆盖率88.71%，Ruff/97文件格式/14模块mypy通过。真实Compose构建、非root、health/ready、离线任务/导出、保卷换容器以及Windows HTTP访问均通过。日志`.cache/optimization/container-linux-20261021/`；[完整范围与失败处置](container-validation-2026-10-21.md)。这是本地Linux容器实测，不是云CI或真实模型评测。
+2026-10-22全面自检：11处问题已复现并修复，Windows完整门禁332PASS/1SKIP、81.02秒、87.69%；Linux333PASS/0SKIP、48.10秒、87.80%；两者均无告警，Ruff、102文件格式和14模块mypy通过，原覆盖率门槛未变。JS8PASS，Windows现有官方MCP参考server握手/list/中文echo/get-sum通过。真实Edge认证、三项离线任务、下载补丁原始副本2/4/5PASS及人工预算恢复通过。详情与限制见[自检报告](self-audit-2026-10-22.md)。以上为本地验收结果；本次同步触发的云CI以工作流结果为准，未做真实模型试跑。
+
+2026-10-21历史Linux门禁：在源码白名单副本和独立Linux卷执行scripts/check.py，287PASS/0SKIP、45.91秒、覆盖率88.71%，Ruff/97文件格式/14模块mypy通过。真实Compose构建、非root、health/ready、离线任务/导出、保卷换容器以及Windows HTTP访问均通过。日志`.cache/optimization/container-linux-20261021/`；[完整范围与失败处置](container-validation-2026-10-21.md)。这是本地Linux容器实测，不是云CI或真实模型评测。
 
 2026-10-20历史协议门禁：281PASS/1SKIP、73.53秒、覆盖率88.56%，Ruff/97文件格式与14模块mypy通过。4项新SDK内存传输回归验证新动作历史与完成示例均符合决策封套，覆盖普通/Schema模式和预算暂停后恢复；历史格式RED4FAIL、完成示例RED4FAIL，最终关联25PASS。日志在`.cache/optimization/decision-history-20261020/`，最终以final-check.log及退出0为准；此前check.log对应尚未修正完成示例的阶段。
 
@@ -71,7 +73,7 @@ uv export --locked --group dev --no-emit-project --format requirements-txt --out
 JS行为测试在仓库根执行：
 
 ```sh
-node --test backend/ui/tests/console.test.mjs showcase/tests/ui.test.mjs
+node --test backend/ui/tests/console.test.mjs backend/ui/tests/audit.test.mjs showcase/tests/ui.test.mjs
 ```
 
 真实Edge浏览器验收在本机临时后端完成：离线提交→done/verified→下载、桌面与375px布局；HTML注入文本与预算25的表单使用明确模拟的API状态验证，实际预算/恢复语义由服务测试验证。独立静态案例页只加载本目录JSON，未请求后端。浏览器日志与截图在本地`.cache/optimization/E3/`，不纳入Git。内置CUA因权限路径启动失败，使用已有Playwright和Edge，无安装新浏览器。
@@ -84,12 +86,12 @@ node --test backend/ui/tests/console.test.mjs showcase/tests/ui.test.mjs
 python scripts/verify_mcp_real.py
 ```
 
-此前Windows使用已安装的`@modelcontextprotocol/server-everything@2026.8.31`，握手、13工具发现、echo与get-sum=42通过。CI安装同一版本，核心pytest不依赖Node或该server。2026-10-21已实际执行本地Docker与Linux Python门禁；未推送触发云端CI，也未在Linux重复官方Node/MCP验收。
+此前Windows使用已安装的`@modelcontextprotocol/server-everything@2026.8.31`，握手、13工具发现、echo与get-sum=42通过。CI安装同一版本，核心pytest不依赖Node或该server。2026-10-21本地Docker/Linux与云CI均有独立证据，云CI包含Windows/Linux官方Node/MCP。2026-10-22当前修复后Windows已复验同一现有参考server，未安装新依赖；当前Linux仅复验Python门禁与自研MCP回归，未重复官方Node/MCP。
 
 ## 本轮证据与未执行项
 
-阶段日志按`.cache/optimization/R1`至`E5`保留；最新次数和最终审查结论见[交付记录](delivery-2026-10-19.md)及[验收矩阵](acceptance.md)。清洁Windows venv仅装运行依赖时27项SDK/Mock/运行服务回归通过。Windows符号链接SKIP历史保留；2026-10-21已在Linux实跑该用例，完整287PASS、无SKIP。
+阶段日志按`.cache/optimization/R1`至`E5`保留；最新次数和最终审查结论见[交付记录](delivery-2026-10-19.md)及本地进度账本。清洁Windows venv仅装运行依赖时27项SDK/Mock/运行服务回归通过。Windows符号链接SKIP历史保留；2026-10-21已在Linux实跑该用例，完整287PASS、无SKIP。
 
-最新本地3B/T1单次真实验收已done/verified=true，原2测试通过、预算内完成；详见[真实记录](local-acceptance-2026-10-20.md)。这不代表其他任务或模型均通过。原计划逐项状态见[验收矩阵](acceptance.md)。未执行：任何远端模型、Docker构建/卷重建、Linux环境、公网发布、真实GitHub交付。进程级复制执行不隔离恶意Python；上线或接收不可信代码需要另外设计操作系统级隔离。
+最新本地3B/T1单次真实验收已done/verified=true，原2测试通过、预算内完成；详见[真实记录](local-acceptance-2026-10-20.md)。这不代表其他任务或模型均通过。原计划逐项状态见[验收矩阵](acceptance.md)。未执行：任何远端模型、真实GitHub PR交付工具验收，以及本轮修复后的真实模型复测。Docker完整构建/卷重建、Linux与公网源码/静态页已有2026-10-21历史证据；本轮容器复验范围以自检报告为准。进程级复制执行不隔离恶意Python；上线或接收不可信代码需要另外设计操作系统级隔离。
 
 运行与恢复操作见[operations.md](operations.md)，机制与取舍见[architecture.md](architecture.md)。

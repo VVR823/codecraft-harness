@@ -1,12 +1,12 @@
 # CodeCraft Harness
 
-[公开案例页](https://vvr823.github.io/codecraft-harness/) · [GitHub 云 CI](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)
+[公开案例页](https://vvr823.github.io/codecraft-harness/)（GitHub Pages，只读）
 
 一个可自部署的单 Agent 代码修复工作台：模型逐步使用工具，执行原始测试，保存动作、用量和断点，再交付可核查的修改。保留自研循环，使用 Python、FastAPI、SQLite 和原生 JS。
 
-**零费用体验从离线演示开始。** 离线T1/T2/T3使用固定公开脚本，无密钥、无模型请求。真实任务可连接自己已有的本地模型服务，不依赖免费API额度。本机同源码/同7B低内存配置固定三任务各一次均通过，补丁已独立复验；T2复用前次同配置结果，详见[固定集报告](docs/evidence/local-7b-fixed-suite-2026-10-20.json)。小集合单次结果不等于任意任务稳定成功。应用在自己电脑运行，另有独立只读案例页，不提供匿名公网代码执行。
+**零费用体验从离线演示开始。** 离线T1/T2/T3使用固定公开脚本，无密钥、无模型请求。真实任务可连接自己已有的本地模型服务，不依赖免费API额度。2026-10-20历史版本在同7B低内存配置下固定三任务各一次通过，补丁已独立复验；T2复用前次同配置结果，详见[固定集报告](docs/evidence/local-7b-fixed-suite-2026-10-20.json)。小集合单次结果不等于任意任务稳定成功；本次修复后未重跑真实模型。应用在自己电脑运行，另有独立只读案例页，不提供匿名公网代码执行。
 
-最新状态：2026-10-21真实Docker构建、非root/健康/离线任务/导出及保卷重建通过；Linux质量门禁287PASS、无SKIP、88.71%。前次Windows门禁286PASS/1SKIP、88.59%；同7B低内存配置T1/T2/T3固定集完成3/3，各项均在20000预算内、0未知，原测试与全新副本补丁复验通过。历史失败保留，详见[逐项验收](docs/acceptance.md)及[容器实测](docs/container-validation-2026-10-21.md)。
+最新本地自检（2026-10-22）：修复11处可复现问题；Windows 332PASS/1SKIP、覆盖率87.69%，Linux 333PASS/0SKIP、87.80%，均无告警；JS 8PASS。真实浏览器离线任务、刷新恢复、导出补丁回放和桌面/手机检查通过；当前源码容器非root冒烟通过，复用已有镜像依赖，未联网重建基础层。详见[自检报告](docs/self-audit-2026-10-22.md)。本次源码同步包含这些修复，对应云CI结果见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)；2026-10-21云CI、完整Docker构建/保卷重建及真实模型固定集按历史版本分别保留。
 
 历史同版通用3B固定集完成1/3；首次代码3B对照完成0/2。失败证据不覆盖，代码模型T1尚未测试，不能将不同版本的单项结果拼成当前完整集合通过。
 
@@ -61,12 +61,13 @@
 | [运行操作](docs/operations.md) | 本地模型、自带源码、人工恢复、配置/API、迁移、导出与Docker模板 |
 | [低内存本地模型](docs/low-memory-local-model.md) | 复用已有7B权重，启动CPU服务、检查加载、显式验收及退出 |
 | [架构说明](docs/architecture.md) | 执行循环、工作区、事务窗口、预算及取舍 |
+| [全面自检](docs/self-audit-2026-10-22.md) | 本轮11项缺陷、实际浏览器与双平台验证 |
 | [测试说明](docs/testing.md) | 本地门禁、评测命令、故障回归与证据边界 |
 | [云端验证与发布](docs/cloud-publication-2026-10-21.md) | 公网案例页、源码和云 CI 入口 |
 | [本轮交付记录](docs/delivery-2026-10-19.md) | 实际检查、未执行项、审查结果 |
 | [原计划逐项验收](docs/acceptance.md) | 22项原始验收条件、证据与环境限制 |
 | [静态案例](showcase/README.md) | 独立只读网页，不连接任务API |
-| [发布来源](docs/evidence/publication-source-2026-10-21.json) | 本次公开源码的文件摘要与历史评测基线 |
+| [发布来源](docs/evidence/publication-source-2026-10-22.json) | 本次源码摘要和变更清单 |
 
 开发门禁：在backend运行 `.\.venv\Scripts\python.exe scripts/check.py`，包括ruff、格式、mypy和pytest-cov。默认离线suite：`python -m app.bench --mode offline_demo --data-dir .\data-bench --output .\reports\offline`。报告保留每次尝试，离线结果不得改标为真实模型成功率。
 
@@ -74,8 +75,8 @@
 
 测试会执行Python代码，只用于可信源码。复制目录、冻结测试、环境白名单和进程树超时清理能减少误操作，无法隔离恶意代码或阻断其网络访问。默认单worker、本机监听、最多2个并行run；不作为多租户或匿名SaaS部署。
 
-真实模型修复产物与run完成状态分别记录，不承诺任意模型或任务都能成功。已实测Docker构建/持久卷重建和本地Linux Python门禁；此次未调用远端模型；公开源码和静态案例页已经发布。云 CI 实际状态见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)；GitHub PR 交付工具的真实远端验收仍未执行。容器离线演示不算真实模型成绩，具体范围见逐项验收。九月报告是历史证据，原数据不覆盖；优化前 README（保留在本地历史归档中）仅供历史追溯。
+真实模型修复产物与run完成状态分别记录，不承诺任意模型或任务都能成功。已实测Docker构建/持久卷重建和本地Linux Python门禁；此次未调用远端模型；公开源码和静态案例页已经发布。云 CI 实际状态见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)；GitHub PR 交付工具的真实远端验收仍未执行。容器离线演示不算真实模型成绩，具体范围见逐项验收。九月报告是历史证据，原数据不覆盖；优化前README（保留在本地历史归档中）仅供历史追溯。
 
 MIT License，见 [LICENSE](LICENSE)。
 
-公开仓库从经过筛选的源码快照开始，未上传作者的历史Git对象、真实数据库、密钥或内部恢复记录。历史评测中的Git基线指本机历史；对应应用源码摘要可在公开报告中核对。
+公开仓库从筛选快照更新，保留既有远端历史；未上传本机真实数据、密钥或内部恢复记录。历史模型评测按原应用源码摘要分别核对。

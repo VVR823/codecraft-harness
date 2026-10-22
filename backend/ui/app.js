@@ -69,7 +69,8 @@ async function loadTraces(id) {
   $('prev').disabled=offset===0;$('next').disabled=offset+50>=data.total;
 }
 async function choose(id) {
-  selected=id;offset=0;message('');
+  selected=id;current=null;offset=0;message('');
+  $('detail').hidden=true;$('empty').hidden=false;
   try { await Promise.all([selection.load(id),loadTraces(id),loadRuns()]); } catch(e) {message(e.message);}
 }
 $('mode').onchange=fillPacks;
@@ -84,16 +85,19 @@ $('new-run').onsubmit=async e=>{
   } catch(e) {message(e.message);} finally {$('submit').disabled=false;}
 };
 $('resume').onclick=async()=>{
+  if(!current||current.run_id!==selected){message('任务详情正在加载，请稍后重试。');return;}
   const id=selected;const run=current;$('resume').disabled=true;
   try {await api('tasks/'+encodeURIComponent(id)+'/resume',resumePayload(run,$('new-budget').value));if(id===selected)await choose(id);}
   catch(e){message(e.message);}finally{$('resume').disabled=false;}
 };
 for(const [button,delta] of [['prev',-50],['next',50]]) $(button).onclick=async()=>{offset=Math.max(0,offset+delta);try{await loadTraces(selected);}catch(e){message(e.message);}};
 $('download').onclick=async()=>{
+  if(!current||current.run_id!==selected){message('任务详情正在加载，请稍后重试。');return;}
+  const id=selected;
   try{
-    const result=await api('tasks/'+encodeURIComponent(selected)+'/result');
+    const result=await api('tasks/'+encodeURIComponent(id)+'/result');
     const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
-    const a=document.createElement('a');a.href=url;a.download=`codecraft-${selected}.json`;a.click();URL.revokeObjectURL(url);
+    const a=document.createElement('a');a.href=url;a.download=`codecraft-${id}.json`;a.click();URL.revokeObjectURL(url);
   }catch(e){message(e.message);}
 };
 async function poll(){

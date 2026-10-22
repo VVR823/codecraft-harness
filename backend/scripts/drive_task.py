@@ -3,12 +3,14 @@
 import argparse
 from contextlib import redirect_stdout
 import json
+import sqlite3
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.runtime.run_service import RunService
 from app.runtime.settings import Settings
+from app.store.migrations import MigrationRequired
 
 
 def main(argv=None):
@@ -86,6 +88,18 @@ def main(argv=None):
             if result["status"] in ("paused", "budget_paused", "interrupted")
             else 1
         )
+    except (MigrationRequired, sqlite3.Error):
+        print(
+            json.dumps(
+                {
+                    "error_code": "storage_unavailable",
+                    "error_message": "存储不可用，请检查数据目录；旧库需显式备份迁移，损坏库请保留核查，也可使用新的数据目录",
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        return 1
     except (ValueError, KeyError, OSError) as exc:
         print(
             json.dumps({"error_code": "cli_rejected", "error_message": str(exc)}, ensure_ascii=False),

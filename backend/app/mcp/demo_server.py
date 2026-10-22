@@ -81,10 +81,10 @@ def _handle_call(params: dict, db_dir: Path) -> dict:
     if not db_path.is_file():
         return {"content": [{"type": "text", "text": f"库文件不存在: {db_path}"}], "isError": True}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             cur = conn.execute(sql)
-            rows = cur.fetchall()
+            rows = cur.fetchmany(21)
             cols = [d[0] for d in cur.description] if cur.description else []
         finally:
             conn.close()
@@ -93,7 +93,7 @@ def _handle_call(params: dict, db_dir: Path) -> dict:
     lines = [" | ".join(cols)] + [" | ".join(str(x) for x in r) for r in rows[:20]]
     text = "\n".join(lines) if lines else "(空结果)"
     if len(rows) > 20:
-        text += f"\n…(共 {len(rows)} 行，只显示前 20)"
+        text += "\n…(仅显示前 20 行)"
     return {"content": [{"type": "text", "text": text}], "isError": False}
 
 

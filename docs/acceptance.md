@@ -2,7 +2,11 @@
 
 目标依据是[已批准设计](superpowers/specs/2026-10-19-engineering-hardening-design.md)及[实施总计划](superpowers/plans/2026-10-19-engineering-hardening.md)：零新增费用、可由他人自部署的单Agent代码修复应用。最初调研中的多Agent、Redis队列、RAG等已在批准设计中排除，不是待补的必选项。
 
-## 当前同配置真实固定集
+## 2026-10-22当前本地自检
+
+11项可复现缺陷已修复。Windows332PASS/1SKIP、87.69%，Linux333PASS/0SKIP、87.80%，均无告警；JS8PASS。实际Edge离线提交、下载补丁原副本回放、人工预算恢复、1280/375布局通过；当前源码容器非root冒烟通过。详见[完整自检](self-audit-2026-10-22.md)。本次源码同步包含修复，当前云CI见工作流；旧云CI与旧模型成绩不代表本轮新代码复验。
+
+## 历史同配置真实固定集
 
 2026-10-21追加本地容器/Linux实测：WSL2/Ubuntu24.04.5、Docker29.9.2/Compose5.6.1，项目镜像真实构建；UID10001、health/ready、离线T1及补丁导出通过，换新容器保留同一新命名卷后run/工作区/5个checkpoint摘要一致。Windows控制台HTTP200。Linux Python质量门禁287PASS、无SKIP、45.91秒、覆盖率88.71%，Ruff/97文件格式/14模块mypy通过。只修正一处Windows专用测试夹具，未修改业务代码；前次Windows结果与本次分列。见[实测说明](container-validation-2026-10-21.md)和[机器可读证据](evidence/container-acceptance-2026-10-21.json)，不增加真实模型成绩或宣称云CI通过。
 
@@ -11,7 +15,7 @@
 [可公开核对的JSON报告与原样补丁](evidence/local-7b-fixed-suite-2026-10-20.json)记录同一app源码摘要、完整RunOptions、引擎参数和三项run。T1/T3本轮新run分别72716ab4aade、578f47c747be；T2复用fa828cc35d24。新run的冻结测试、原任务、账本、断点与导出已核对，不扩额、不改题、不重试。
 
 
-此前内存处置与T2单项复验：用户授权关闭非GPT应用后，可用内存实测5.68GiB。复用已有qwen2.5:7b权重，以独立本地llama-server关闭CPU重排、mmap加载、4096上下文、128/64批次、1并发、6线程；健康检查200，成功加载后可用1.42GiB。T2 run fa828cc35d24正常done/verified，原4测试通过，7798 token/0未知、120.649秒，低于原20000预算，repeat1/retries0。导出补丁在全新内置源副本直接应用，由4FAIL变为4PASS，无手工改码、改测试或额外模型请求。所有旧失败保留；这是当前源码在7B低内存配置的单项成功，不是同版全任务通过或稳定成功率证明。
+此前内存处置与T2单项复验：用户授权关闭非GPT应用后，可用内存实测5.68GiB。复用已有qwen2.5:7b权重，以独立本地llama-server关闭CPU重排、mmap加载、4096上下文、128/64批次、1并发、6线程；健康检查200，成功加载后可用1.42GiB。T2 run fa828cc35d24正常done/verified，原4测试通过，7798 token/0未知、120.649秒，低于原20000预算，repeat1/retries0。导出补丁在全新内置源副本直接应用，由4FAIL变为4PASS，无手工改码、改测试或额外模型请求。所有旧失败保留；这是2026-10-20源码在7B低内存配置的单项成功，不是同版全任务通过或稳定成功率证明。
 
 2026-10-20当前源码完整离线门禁：**286PASS/1SKIP，覆盖率88.59%**；Ruff、97文件格式检查及14模块mypy通过。最新日志为`.cache/optimization/small-file-repair-20261020/recovery-check.log`。JavaScript6PASS和浏览器核对是此前交付证据，见`.cache/optimization/plan-closeout-20261020/`。下表逐项对应设计第9节，已有人工/安装证据保留原时间属性，不冒充本次重跑。
 

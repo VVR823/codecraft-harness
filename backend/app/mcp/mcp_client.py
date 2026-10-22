@@ -21,6 +21,7 @@ MCP = Model Context Protocol，四层概念：协议层（JSON-RPC 2.0）/ trans
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -73,6 +74,7 @@ class MCPClient:
             stderr=subprocess.DEVNULL,
             bufsize=0,
             cwd=self._cwd,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
         )
         # 握手：initialize + initialized 通知（MCP 协议要求）
         init = self._request(
@@ -88,15 +90,21 @@ class MCPClient:
 
     def stop(self) -> None:
         if self.proc is not None:
+            proc = self.proc
             try:
-                self.proc.terminate()
-                self.proc.wait(timeout=3)
+                proc.terminate()
+                proc.wait(timeout=3)
             except Exception:  # noqa: BLE001
                 try:
-                    self.proc.kill()
+                    proc.kill()
+                    proc.wait(timeout=3)
                 except Exception:  # noqa: BLE001
                     pass
-            self.proc = None
+            finally:
+                for pipe in (proc.stdin, proc.stdout):
+                    if pipe is not None:
+                        pipe.close()
+                self.proc = None
 
     def __enter__(self):
         self.start()

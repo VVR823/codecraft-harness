@@ -214,6 +214,11 @@ class HarnessLoop:
         self._last_green_test_step = -1
         for t in db.committed_actions(self.run_id):
             result = t["result"]
+            if t["tool"] == "run_tests":
+                self._last_green_test_step = (
+                    t["step"] if result.get("ok") and result.get("data", {}).get("verified") else -1
+                )
+                continue
             if not result.get("ok"):
                 continue
             if (
@@ -221,8 +226,6 @@ class HarnessLoop:
                 and result.get("data", {}).get("changed") is not False
             ):
                 self._last_write_step = t["step"]
-            elif t["tool"] == "run_tests" and result.get("data", {}).get("verified"):
-                self._last_green_test_step = t["step"]
         # 上一步动作（防重复写）：取 trace 最后一条非空工具记录
         for t in reversed(db.committed_actions(self.run_id)):
             if t["result"].get("ok"):
@@ -697,8 +700,8 @@ class HarnessLoop:
         # 强制验证状态：记录最后一次写文件 / 最后一次全绿测试的步号
         if tool in ("edit_file", "write_file") and result.ok and result.data.get("changed") is not False:
             self._last_write_step = step
-        elif tool == "run_tests" and result.ok and result.data.get("verified"):
-            self._last_green_test_step = step
+        elif tool == "run_tests":
+            self._last_green_test_step = step if result.ok and result.data.get("verified") else -1
 
         self._pending_action = (action_id, {"output": output, "ok": result.ok, "data": result.data})
         self.messages.append(

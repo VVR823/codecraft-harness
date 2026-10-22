@@ -13,6 +13,29 @@ from .runtime.execution_lock import execution_lock
 from .store import db
 
 
+def _file_patch(rel, old, new):
+    old_exists, new_exists = old.is_file(), new.is_file()
+    before = old.read_bytes().decode("utf-8") if old_exists else ""
+    after = new.read_bytes().decode("utf-8") if new_exists else ""
+    if old_exists == new_exists and before == after:
+        return []
+    old_name = json.dumps("a/" + rel.as_posix(), ensure_ascii=False)
+    new_name = json.dumps("b/" + rel.as_posix(), ensure_ascii=False)
+    patch = [f"diff --git {old_name} {new_name}\n"]
+    if not old_exists:
+        patch.append("new file mode 100644\n")
+    elif not new_exists:
+        patch.append("deleted file mode 100644\n")
+    for line in difflib.unified_diff(
+        before.splitlines(keepends=True),
+        after.splitlines(keepends=True),
+        fromfile=old_name if old_exists else "/dev/null",
+        tofile=new_name if new_exists else "/dev/null",
+    ):
+        patch.append(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n")
+    return patch
+
+
 def result_bundle(service, run_id):
     with execution_lock(service.settings.data_dir, run_id), service.database():
         run = service.get(run_id)
@@ -66,18 +89,9 @@ def _result_bundle_locked(service, run_id):
             if max((p.stat().st_size if p.is_file() else 0 for p in (old, new))) > 262144:
                 continue
             try:
-                before = old.read_text(encoding="utf-8") if old.is_file() else ""
-                after = new.read_text(encoding="utf-8") if new.is_file() else ""
+                patches.extend(_file_patch(rel, old, new))
             except UnicodeError:
                 continue
-            patches.extend(
-                difflib.unified_diff(
-                    before.splitlines(keepends=True),
-                    after.splitlines(keepends=True),
-                    fromfile="a/" + rel.as_posix(),
-                    tofile="b/" + rel.as_posix(),
-                )
-            )
     patch = redact("".join(patches))
     if len(patch.encode("utf-8")) > 2 * 1024 * 1024:
         raise ValueError("补丁超过2MiB，请在私有工作区自行取回")
@@ -124,7 +138,7 @@ def export_run(service, run_id, output):
     bundle = result_bundle(service, run_id)
     output.mkdir(parents=True, exist_ok=True)
     (output / "result.json").write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
-    (output / "changes.patch").write_text(bundle["patch"], encoding="utf-8")
+    (output / "changes.patch").write_bytes(bundle["patch"].encode("utf-8"))
     return bundle
 
 

@@ -67,6 +67,10 @@ class Settings(BaseModel):
         if options.mode == "offline_demo":
             return
         url = urlsplit(self.base_url)
+        try:
+            _ = url.port
+        except ValueError:
+            raise ValueError("模型端点端口必须是0至65535的整数") from None
         if (
             url.scheme not in ("http", "https")
             or not url.hostname

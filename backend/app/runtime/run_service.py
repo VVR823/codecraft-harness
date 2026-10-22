@@ -119,15 +119,13 @@ class RunService:
                 ),
                 default=-1,
             )
-            green = max(
-                (
-                    a["step"]
-                    for a in actions
-                    if a["tool"] == "run_tests"
-                    and a["result"].get("data", {}).get("verified")
-                    and a["result"].get("ok")
-                ),
-                default=-1,
+            latest_test = next((a for a in reversed(actions) if a["tool"] == "run_tests"), None)
+            green = (
+                latest_test["step"]
+                if latest_test
+                and latest_test["result"].get("ok")
+                and latest_test["result"].get("data", {}).get("verified")
+                else -1
             )
             options = json.loads(row["options_json"] or "{}")
             traces = db.list_traces(run_id)

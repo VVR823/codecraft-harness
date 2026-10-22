@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test ui/tests/console.test.mjs ../showcase/tests/ui.test.mjs
+      - run: node --test ui/tests/console.test.mjs ui/tests/audit.test.mjs ../showcase/tests/ui.test.mjs
       - name: Official local MCP reference server
         run: |
           npm install --prefix .mcp-verify @modelcontextprotocol/server-everything@2026.8.31

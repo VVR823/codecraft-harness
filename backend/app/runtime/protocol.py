@@ -57,6 +57,8 @@ class AgentStep(BaseModel):
         """
         if v is None:
             return v
+        if isinstance(v, Tool):
+            v = v.value
         if isinstance(v, str) and v.startswith(MCP_PREFIX):
             return v
         from ..tools.registry import get_tool
