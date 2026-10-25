@@ -16,7 +16,7 @@ $env:CODECRAFT_MODEL = '你的已有模型名'
 .\.venv\Scripts\python.exe scripts/drive_task.py t1_single_fix --mode local --workspace D:\your-project --goal '修复已有测试暴露的问题' --data-dir .\data-local
 ```
 
-`--workspace`明确授权读取该本地目录，执行发生在其副本；Web只选择内置任务，不允许提交任意宿主路径。源码项目需要可在当前Python环境运行的pytest测试；不自动安装项目依赖。GitHub交付另需显式`--github --workspace <干净独立仓库>`、可用Git/gh及操作者已有凭证；副本保留来源提交历史，源仓库不变。拒绝Git worktree的.git指向文件和origin中嵌入的凭证。GitHub模式可能产生远端副作用，本轮未执行真实交付。
+`--workspace`明确授权读取该本地目录，执行发生在其副本；Web只选择内置任务，不允许提交任意宿主路径。源码项目需要可在当前Python环境运行的pytest测试；不自动安装项目依赖。GitHub交付另需显式`--github --workspace <干净独立仓库>`、可用Git/gh及操作者已有凭证；副本保留来源提交历史，源仓库不变。拒绝Git worktree的.git指向文件和origin中嵌入的凭证。GitHub模式会产生远端副作用；2026-10-25已在专用合成夹具分支完成真实工具交付，见[新版验收](real-acceptance-2026-10-25.md)。固定控制器通过不代表模型自主交付。
 
 ## 显式启用本地结构化决策
 
@@ -35,6 +35,10 @@ $env:CODECRAFT_MODEL_TIMEOUT = '300'
 早期Schema接入后的3B/T1曾因精确编辑失败而预算暂停，记录见[结构化输出记录](local-structured-output-probe-2026-10-20.md)。随后T1/T2/T3分别有真实成功记录，但模型和源码版本不同；最新状态以[逐项验收](acceptance.md)为准，Schema本身不保证任务成功。
 
 ## 人工恢复一段
+
+`repair_stalled`表示当前执行段对同一文件连续3次`edit_file`/`write_file`失败，任务已暂停。先查看错误并调整修复方式，再显式恢复；刷新页面或重启服务不会自动续跑。恢复后可直接重新读取该文件，并获得一段新的有限修复机会；累计token预算仍然保留。
+
+失败后工具反馈会提醒重新读取、保留文档字符串成对三引号，以及使用完整、唯一的代码行做局部替换。读取文件和内容未变的写入不算修复进展；真正成功修改会重置失败计数。相对路径和工作区内绝对路径按同一文件判断。该规则不放宽语法检查、原测试保护或完成判定。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/drive_task.py --resume RUN_ID --data-dir .\data-demo
@@ -138,6 +142,6 @@ docker compose run --rm backend drive t1_single_fix --mode offline_demo --data-d
 
 默认映射127.0.0.1:8000；容器内监听0.0.0.0方便映射。重建时保留harness_data卷；不要执行`down -v`删除产物。旧schema启动只给迁移说明，不自动升级。
 
-WSL内只启动后台服务不会持续保持WSL运行；前台Compose窗口需保持打开，Ctrl+C停止应用。本机已准备D:/CodeCraftEnv/start-codecraft.cmd，双击后访问http://127.0.0.1:8000/console/；使用独立codecraft-local卷及已构建镜像。关闭后无需重新安装，镜像与数据保留；彻底释放WSL内存可在没有其他WSL任务时执行`wsl --shutdown`。需要下载镜像/重建时，本机配置依赖原有127.0.0.1:7897代理；应用离线演示不请求模型。
+在WSL终端按上文执行 docker compose up 并保持终端打开，Ctrl+C停止应用；镜像与数据卷保留。需要释放WSL内存时，先确认没有其他WSL任务，再由操作者执行 wsl --shutdown。安装路径与镜像下载网络由各自环境配置，不依赖作者电脑上的启动脚本或代理。
 
 故障核查与实测范围见[testing.md](testing.md)，状态和事务设计见[architecture.md](architecture.md)。

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -226,11 +227,11 @@ class HarnessLoop:
                 and result.get("data", {}).get("changed") is not False
             ):
                 self._last_write_step = t["step"]
-        # 上一步动作（防重复写）：取 trace 最后一条非空工具记录
-        for t in reversed(db.committed_actions(self.run_id)):
+        # 与实时执行一致：最后一步失败就清空去重状态，允许恢复后重新读取。
+        self._prev_action = None
+        for t in db.committed_actions(self.run_id)[-1:]:
             if t["result"].get("ok"):
                 self._prev_action = {"tool": t["tool"], "args": t["args"], "step": t["step"]}
-                break
 
     # ---------- 对外入口 ----------
     # ---------- 长期记忆（M5-B3） ----------
@@ -464,6 +465,7 @@ class HarnessLoop:
         # 旧绝对语义下 resume 立即再 paused，一步都续不了）。
         segment_end = start_step + MAX_STEPS - 1
         step = start_step - 1
+        self._repair_segment_start = len(self.done_actions)
         try:
             while step < segment_end:
                 if getattr(self.meter, "unknown_calls", 0):
@@ -509,8 +511,12 @@ class HarnessLoop:
                     self.messages.append({"role": "user", "content": deny})
                     continue
                 self._execute(act, step)
+                repair_pause = self._repair_failure_guard()
                 self._stall_radar()  # O4：连续零进展动作 → trace/日志（可选提醒）
                 self._checkpoint(step)
+                if repair_pause:
+                    db.set_error(self.run_id, "repair_stalled", repair_pause, "paused")
+                    return self._summary("paused", steps=step, reason=repair_pause)
             db.update_run_status(self.run_id, "paused")
             return self._summary("paused", steps=step)
         except StepParseError as e:
@@ -676,6 +682,44 @@ class HarnessLoop:
         return PAGE_WALK_MSG.format(path=path, n=PAGE_WALK_LIMIT)
 
     # ---------- 工具执行 ----------
+    def _repair_failure_guard(self) -> str:
+        """Bound failed repairs per file and explicit execution segment; reads are not progress."""
+        actions = self.done_actions[self._repair_segment_start :]
+        latest = actions[-1]
+        if latest["tool"] not in ("edit_file", "write_file") or latest["ok"]:
+            return ""
+
+        def target(action):
+            path = action.get("args", {}).get("path")
+            return (
+                os.path.normcase(os.path.abspath(self.workspace / path))
+                if isinstance(path, str) and path
+                else None
+            )
+
+        path = target(latest)
+        if path is None:
+            return ""
+        failures = 0
+        for action in reversed(actions):
+            if action["tool"] not in ("edit_file", "write_file"):
+                continue
+            if action["ok"] and action.get("data", {}).get("changed") is False:
+                continue
+            if action["ok"] or target(action) != path:
+                break
+            failures += 1
+        guidance = (
+            f"\n[修复恢复] 对 {latest['args']['path']} 连续{failures}次修改失败。先 read_file 核对当前文件，再调整编辑方式。"
+            "少量修改可用 edit_file，old 复制完整、唯一的原始代码行并保留缩进；"
+            "全文 write_file 必须保留文档字符串成对的三引号、import和其他定义。不要重复相同的无效内容，原测试与校验规则保持不变。"
+        )
+        pause = (
+            "同一文件连续3次修改失败，已暂停；请人工检查后显式恢复，不会自动续跑。" if failures >= 3 else ""
+        )
+        self.messages[-1]["content"] += guidance + ("\n" + pause if pause else "")
+        return pause
+
     def _execute(self, act: AgentStep, step: int) -> dict:
         tool = act.tool_name or ""
         args = act.args or {}

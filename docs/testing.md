@@ -1,5 +1,7 @@
 # CodeCraft验证方式与证据
 
+2026-10-26更新：最新失败恢复修复与[真实仓库单次验收](real-repository-2026-10-26.md)已纳入此次发布包。2026-10-25真实模型固定集为2/3，旧3/3仍是历史版本证据。本次源码身份/发布前门禁见[来源报告](evidence/publication-source-2026-10-26.json)，云CI以[对应提交工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)为准；下文旧日期的“本次/当前”只指该日期的验收，不能替代最新验证。
+
 所有核心回归使用临时数据库、私有工作区、固定决策器或模型MockTransport，质量门禁不调用模型。后续单独授权的本地模型尝试见[真实验收](local-acceptance-2026-10-20.md)；历史公开源码/静态页与云CI见[公开交付](cloud-publication-2026-10-21.md)。本轮未调用远端模型；修复随本次源码更新同步。离线演示与真实模型评测必须分开解读。
 
 2026-10-22全面自检：11处问题已复现并修复，Windows完整门禁332PASS/1SKIP、81.02秒、87.69%；Linux333PASS/0SKIP、48.10秒、87.80%；两者均无告警，Ruff、102文件格式和14模块mypy通过，原覆盖率门槛未变。JS8PASS，Windows现有官方MCP参考server握手/list/中文echo/get-sum通过。真实Edge认证、三项离线任务、下载补丁原始副本2/4/5PASS及人工预算恢复通过。详情与限制见[自检报告](self-audit-2026-10-22.md)。以上为本地验收结果；本次同步触发的云CI以工作流结果为准，未做真实模型试跑。

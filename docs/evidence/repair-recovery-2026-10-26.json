@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-26",
+  "status": "Local validation recorded before publication; this source package includes the fix; see matching GitHub workflow",
+  "source_app_sha256": "0ee804cb77198210e7ce7a015b218ec7cd0005acfd94209e508362ad65a74770",
+  "changed_preexisting_code_files": [
+    "backend/app/runtime/loop.py"
+  ],
+  "new_test_file": "backend/tests/test_repair_recovery.py",
+  "red": {
+    "initial_failed": 7,
+    "initial_passed": 2,
+    "review_failed": 2
+  },
+  "green": {
+    "associated_passed": 53,
+    "new_cases": 11
+  },
+  "final_windows": {
+    "passed": 343,
+    "skipped": 1,
+    "test_warnings": 0,
+    "coverage_percent": 87.83,
+    "seconds": 105.74,
+    "ruff": "passed",
+    "formatted_files": 103,
+    "mypy_modules": 14
+  },
+  "independent_review": "Two P2 findings reproduced and fixed; final limited review found no new definite P1/P2.",
+  "semantics": {
+    "per_explicit_segment_failed_edit_limit": 3,
+    "successful_actual_change_resets": true,
+    "reads_and_noops_reset": false,
+    "relative_absolute_paths_share_target": true,
+    "manual_resume_starts_new_segment": true,
+    "no_automatic_resume": true
+  },
+  "protection": {
+    "original_worktree_and_real_data_preserved": true
+  },
+  "real_model_requests": 0,
+  "network_requests": 0,
+  "new_paid_services": false,
+  "published": null,
+  "not_revalidated": [
+    "real model task success",
+    "Linux/Docker or cloud CI of this changed source"
+  ],
+  "historical_model_evidence": "2026-10-25 2/3 at app d9f52055 remains historical; no claim that T3 now passes."
+}

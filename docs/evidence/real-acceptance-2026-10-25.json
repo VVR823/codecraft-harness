@@ -1,0 +1,134 @@
+{
+  "date": "2026-10-25",
+  "source_app_sha256": "d9f520554a709932ef0b296f5e6fd567bd0a560610231e0f62ec304c70361db4",
+  "published_source_commit": "1d10f7540fd74c7ca4dba29224b71e83274c457e",
+  "model": {
+    "evidence_kind": "real local inference",
+    "name": "qwen2.5-7b-cpu-norepack",
+    "options": {
+      "mode": "local",
+      "model": "qwen2.5-7b-cpu-norepack",
+      "token_budget": 20000,
+      "context_compress": false,
+      "structured_output": true,
+      "keep_recent_steps": 3,
+      "use_plan": false,
+      "use_skills": false,
+      "use_mcp": false,
+      "use_memory": false,
+      "use_github": false
+    },
+    "repeat": 1,
+    "retries": 0,
+    "samples": 3,
+    "verified_successes": 2,
+    "known_tokens": 35428,
+    "unknown_calls": 0,
+    "duration_s": 402.936,
+    "attempts": [
+      {
+        "run_id": "a4ca0dd9ea90",
+        "task_id": "t1_single_fix",
+        "status": "done",
+        "verified": true,
+        "known_tokens": 5820,
+        "unknown_calls": 0,
+        "duration_s": 52.344,
+        "tool_calls": 4,
+        "patch_bytes": 363,
+        "patch_sha256": "688b93ce987f31eb5823e3cd831aa98ac4c52022b372f60f6a2ee36d8509dccd",
+        "git_apply_exit": 0,
+        "original_tests_expected": 2,
+        "original_and_frozen_tests_preserved": true,
+        "ledger_matches": true,
+        "checkpoint_matches": true,
+        "replay_exit": 0,
+        "patch_path": "patches-2026-10-25/a4ca0dd9ea90.patch"
+      },
+      {
+        "run_id": "025dd14d2f60",
+        "task_id": "t2_missing_fn",
+        "status": "done",
+        "verified": true,
+        "known_tokens": 7778,
+        "unknown_calls": 0,
+        "duration_s": 78.709,
+        "tool_calls": 4,
+        "patch_bytes": 860,
+        "patch_sha256": "28cc4aa99767e8f449f83389735ff56e82682e2970b4dcfd8f97b4c29111dd48",
+        "git_apply_exit": 0,
+        "original_tests_expected": 4,
+        "original_and_frozen_tests_preserved": true,
+        "ledger_matches": true,
+        "checkpoint_matches": true,
+        "replay_exit": 0,
+        "patch_path": "patches-2026-10-25/025dd14d2f60.patch"
+      },
+      {
+        "run_id": "36c50488352c",
+        "task_id": "t3_cross_file",
+        "status": "budget_paused",
+        "verified": false,
+        "known_tokens": 21830,
+        "unknown_calls": 0,
+        "duration_s": 271.883,
+        "tool_calls": 10,
+        "patch_bytes": 0,
+        "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "git_apply_exit": null,
+        "original_tests_expected": 5,
+        "original_and_frozen_tests_preserved": true,
+        "ledger_matches": true,
+        "checkpoint_matches": true,
+        "replay_exit": 1,
+        "failure_category": "Invalid Python with full-width punctuation was rejected; subsequent exact edits were ambiguous or absent. No valid patch."
+      }
+    ],
+    "budget_semantics": "Request-boundary accounting, not hard per-token stop; T3 last request brought accounted usage to 21830 against 20000 threshold.",
+    "statistical_claim": "One small fixed-suite run only; no stable success rate claim."
+  },
+  "github_delivery": {
+    "method": "Fixed controller through unmodified product RunService and real Git/GitHub tools; not model autonomous delivery",
+    "run_id": "f2bbffc40006",
+    "status": "done",
+    "verified": true,
+    "original_tests_passed": 2,
+    "base_branch": "acceptance/github-tools-20261025-base",
+    "base_commit": "c8fb81636c047b11cb963627ada49af80f7f036b",
+    "head_branch": "acceptance/github-tools-20261025-fix",
+    "head_commit": "cc554e820ae9bee755488b6d9920fc6c0cdad356",
+    "pr_url": "https://github.com/VVR823/codecraft-harness/pull/1",
+    "pr_state": "open",
+    "merged": false,
+    "changed_files": [
+      {
+        "path": "calc.py",
+        "patch": "@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a - b\n+    return a + b"
+      }
+    ],
+    "real_tools": [
+      "git_branch",
+      "edit_file",
+      "run_tests",
+      "git_commit",
+      "git_push",
+      "gh_create_pr"
+    ],
+    "main_unchanged": true,
+    "source_unchanged": true,
+    "frozen_tests_intact": true,
+    "test_sha256": "763b3fc14a852296f16c458ab20fa57132a219d460ec5f290786a629d1764384",
+    "verification_api": "official gh, direct no proxy; existing credential in memory only"
+  },
+  "protection": {
+    "original_worktree_and_real_data_preserved": true
+  },
+  "network": "Authenticated local-proxy probe was denied by automatic review and not executed. Direct no-proxy official gh and git succeeded and were used.",
+  "local_harness_issue": "Patch replay helper initially lacked forced child Python UTF-8. Corrected helper environment, replayed same patches in fresh copies; no model retry or product change.",
+  "boundaries": [
+    "Fixed PR controller is not model autonomous delivery.",
+    "Acceptance PR remains open and unmerged on dedicated fixture branches; main unchanged.",
+    "No remote model, new paid service, install, system configuration change or automatic rerun.",
+    "New report and patches are local artifacts; public main was not updated."
+  ]
+}

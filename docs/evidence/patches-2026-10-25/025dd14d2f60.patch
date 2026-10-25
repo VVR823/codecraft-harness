@@ -1,0 +1,24 @@
+diff --git "a/module.py" "b/module.py"
+--- "a/module.py"
++++ "b/module.py"
+@@ -1,8 +1,3 @@
+-"""z-score 标准化函数（唯一函数）。
+-
+-当前实现被清空（抛 NotImplementedError），依赖它的测试全红。
+-你的任务：补全 zscore 的实现。文件里只有这一个函数，整文件覆盖是安全的。
+-"""
+ from __future__ import annotations
+ 
+ 
+@@ -15,4 +10,10 @@
+     - 序列全相等（std == 0）时返回长度相同的全 0.0 列表
+     - 被清空的函数：当前只抛异常（bug 所在）
+     """
+-    raise NotImplementedError("zscore 待实现")
++    if not values:
++        return []
++    mean = sum(values) / len(values)
++    std = (sum((x - mean) ** 2 for x in values) / len(values)) ** 0.5
++    if std == 0:
++        return [0.0] * len(values)
++    return [(x - mean) / std for x in values]

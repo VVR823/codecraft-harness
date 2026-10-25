@@ -1,0 +1,100 @@
+{
+  "date": "2026-10-26",
+  "evidence_kind": "Real local model; maintainer own published repository; path-guided defect report",
+  "repository": "https://github.com/VVR823/codecraft-harness",
+  "base_commit": "1d10f7540fd74c7ca4dba29224b71e83274c457e",
+  "original_repository_files": 182,
+  "evaluation_files": 184,
+  "product_defects_injected": 0,
+  "added_evaluation_files": [
+    "pytest.ini",
+    "backend/tests/test_real_repository_resume.py"
+  ],
+  "issue": "修复这个真实仓库的人工恢复缺陷。复现测试是backend/tests/test_real_repository_resume.py；恢复运行的实现位于backend/app/runtime/loop.py。场景：成功read_file后发生失败编辑并预算暂停，人工恢复后首次重新读取同一文件必须执行；最后一步确为成功读取时仍应拦截重复读取。先运行原测试并读取复现和相关实现，做最小修改，最后运行原测试。不得修改或删除测试、pytest配置、权限、预算和完成条件。",
+  "reference_fix_exposed": false,
+  "harness_app_sha256": "0ee804cb77198210e7ce7a015b218ec7cd0005acfd94209e508362ad65a74770",
+  "model": "qwen2.5-7b-cpu-norepack",
+  "options": {
+    "mode": "local",
+    "model": "qwen2.5-7b-cpu-norepack",
+    "token_budget": 20000,
+    "context_compress": true,
+    "structured_output": true,
+    "keep_recent_steps": 1,
+    "use_plan": false,
+    "use_skills": false,
+    "use_mcp": false,
+    "use_memory": false,
+    "use_github": false
+  },
+  "run_id": "a6c071abf667",
+  "status": "budget_paused",
+  "verified": false,
+  "known_tokens": 21137,
+  "unknown_calls": 0,
+  "model_calls": 9,
+  "duration_s": 484.532,
+  "tool_actions": 8,
+  "changed_files": [],
+  "baseline": {
+    "full_original_backend": {
+      "failed": 2,
+      "passed": 333,
+      "skipped": 1
+    },
+    "frozen_runtime_suite": {
+      "failed": 2,
+      "passed": 34,
+      "confirmed_via_product_executor": true
+    }
+  },
+  "replay": {
+    "performed": false,
+    "reason": "No patch was produced; independent replay not applicable; no manual code change."
+  },
+  "patch_bytes": 0,
+  "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "test_sha256": "1ae74ab0a597e6931d4666b33b8f001dc8ff6b435806f98261a838818a9d199e",
+  "patch_path": "real-repository-2026-10-26/changes.patch",
+  "reproduction_test_path": "real-repository-2026-10-26/test_real_repository_resume.py",
+  "frozen_tests_intact": true,
+  "source_intact": true,
+  "checkpoint_matches": true,
+  "invalid_preparation_attempt": {
+    "run_id": "d66e51e25e7e",
+    "status": "budget_paused",
+    "known_tokens": 22207,
+    "unknown_calls": 0,
+    "duration_s": 206.871,
+    "patch_bytes": 0,
+    "reason": "Backend-only task snapshot omitted root showcase resources; 3 extra original tests failed. Invalid as model capability evaluation; not hidden or scored as success."
+  },
+  "uncompressed_context_failure": {
+    "run_id": "6dcf6512acc0",
+    "status": "paused",
+    "known_tokens": 9642,
+    "unknown_calls": 1,
+    "duration_s": 140.889,
+    "patch_bytes": 0,
+    "reason": "Server rejected the fifth request: 5321 prompt tokens exceed 4096 context; usage_unknown persisted and run paused."
+  },
+  "stopped_compression_configuration": {
+    "run_id": "4de0f2fd376f",
+    "status": "operator_stopped",
+    "known_tokens": 16417,
+    "unknown_calls": 1,
+    "reason": "keep_recent_steps=0 compresses even the latest code read to 60 characters; invalid repair configuration stopped, all costs retained",
+    "patch_bytes": 0
+  },
+  "aggregate_known_tokens_including_invalid": 69403,
+  "aggregate_unknown_calls_including_invalid": 2,
+  "model_runs_including_invalid_preparation": 4,
+  "final_configuration_repeat": 1,
+  "configuration_changes_disclosed": true,
+  "new_api_fees": 0,
+  "limitations": [
+    "Only one known defect in maintainer own real repository; file path supplied.",
+    "Not a blind external-repository benchmark, stable success rate, or long-horizon task proof.",
+    "Global search currently requests a single-file path when more than 50 eligible files are present."
+  ]
+}
