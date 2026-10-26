@@ -125,36 +125,41 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
         # 页面超长自动收缩：只返回"完整行"，绝不拦腰截断（T4 run10 实证：1500 行源码
         # 每页 100 行 ≈6500 字符 > 6000 字符上限，旧实现把页尾 ~25 行砍成残行——模型
         # 看到"[截断 N 字符]"以为漏内容，反复折返重读同一 offset、乱序跳读漏行）。
-        while len(rows) > 1:
-            budget = READ_FILE_CAP - (len(f"[行 {offset}-{offset + len(rows) - 1} / 共 {total} 行]") + 1)
-            if sum(len(r) + 1 for r in rows) <= budget:
-                break
-            rows = rows[:-1]  # 从页尾逐行裁，直到整页能完整放进单次上限
-        seg = "\n".join(rows)
-        end = offset + len(rows) - 1
-        header = f"[行 {offset}-{end} / 共 {total} 行]"
-        if end >= total:
-            header += "（已到文件末尾）"
-        out = header + "\n" + seg
-        if end < req_end:
-            out += (
-                f"\n（注：请求的 {limit} 行超出单次上限 {READ_FILE_CAP} 字符，"
-                f"已自动收缩到行 {offset}-{end}（完整行，无截断）。"
-                f"继续请用 offset={end + 1}；只需一小段就减小 limit）"
-            )
-        return ToolResult(out)
+        while rows:
+            end = offset + len(rows) - 1
+            header = f"[行 {offset}-{end} / 共 {total} 行]"
+            if end >= total:
+                header += "（已到文件末尾）"
+            note = ""
+            if end < req_end:
+                note = (
+                    f"\n（注：请求的 {limit} 行超出单次上限 {READ_FILE_CAP} 字符，"
+                    f"已自动收缩到行 {offset}-{end}（完整行，无截断）。"
+                    f"继续请用 offset={end + 1}；只需一小段就减小 limit）"
+                )
+            out = header + "\n" + "\n".join(rows) + note
+            # 行号和翻页提示也占预算，必须在消息层再次限长前一起计入。
+            if len(out) <= READ_FILE_CAP:
+                return ToolResult(out)
+            rows = rows[:-1]
+        return ToolResult(
+            f"第 {offset} 行单行内容连同行号提示超过 {READ_FILE_CAP} 字符上限，"
+            "无法完整展示。请用 search_file 定位具体关键词，或 read_file 读取其他行；"
+            "本次未返回该行内容。",
+            ok=False,
+        )
 
     # 全文（自动截断防上下文爆炸）
     if len(content) <= READ_FILE_CAP:
         return ToolResult(content)
     cap_note = (
         f"\n...[文件共 {total} 行 / {len(content)} 字符，超过单次读取上限，"
-        f"当前仅显示前 {READ_FILE_CAP} 字符]...\n"
+        "当前仅显示开头片段]...\n"
         f"注意：大文件不要逐页通读！若你在找特定定义/引用（函数名、变量名、格式名等），"
-        f'用 search_file 直接定位（{{"pattern": "关键词", "path": "{str(args.get("path", ""))}"}}）'
+        "用 search_file 直接定位（pattern 填关键词，path 填当前文件路径），"
         f"拿到文件:行号后，再 read_file 分页精读目标区间。"
     )
-    return ToolResult(_truncate(content, READ_FILE_CAP) + cap_note)
+    return ToolResult(content[: READ_FILE_CAP - len(cap_note)] + cap_note)
 
 
 def _search_file(workspace: Path, args: dict) -> ToolResult:

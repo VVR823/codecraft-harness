@@ -22,14 +22,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# summary 区每行一个失败：FAILED <nodeid> - <message>
-FAILED_LINE = re.compile(r"^FAILED (\S+?) - (.*)$", re.M)
+# 长nodeid的摘要可能只有名称，没有" - 错误"；参数ID也可能含空格。
+FAILED_LINE = re.compile(r"^(FAILED|ERROR) ([^\r\n]+)\r?$", re.M)
 # 统计行里的计数（全绿 / 有红 / 有 error 措辞不同，分开抓）
 STAT_PASSED = re.compile(r"(\d+) passed")
 STAT_FAILED = re.compile(r"(\d+) failed")
 STAT_ERROR = re.compile(r"(\d+) error")
 # FAILURES 区的"文件:行号:"定位行（Windows 盘符 C:\\ 前缀也要吃下）
-LOC_LINE = re.compile(r"^([A-Za-z]:[^:\n]*\.py|[^:\n]*\.py):(\d+):", re.M)
+LOC_LINE = re.compile(r"^([A-Za-z]:[^\r\n]*?\.py|[^\r\n]*?\.py):(\d+):[ \t]*(.*)$", re.M)
 
 
 def parse_pytest_output(stdout: str, exit_code: int | None = None, timed_out: bool = False) -> dict:
@@ -39,26 +39,68 @@ def parse_pytest_output(stdout: str, exit_code: int | None = None, timed_out: bo
     failures 每项 {nodeid, file, line, message}；计数解析不到时为 None。
     """
     out = stdout or ""
-    # 1) 失败列表：summary 区 FAILED 行（nodeid + 一行 message）
+    # 1) 保留无错误文字的摘要；详细异常可从 --tb=line 的定位行补全。
     failures = []
+    kinds = []
     for m in FAILED_LINE.finditer(out):
-        nodeid = m.group(1).strip()
-        message = m.group(2).strip()
-        file = nodeid.split("::")[0] if "::" in nodeid else nodeid
-        failures.append({"nodeid": nodeid, "file": file, "line": None, "message": message})
-    # 2) 行号：FAILURES 区"文件:行号:"顺序与 summary 一致，按序 zip 补上
-    locs = [(m.group(1), int(m.group(2))) for m in LOC_LINE.finditer(out)]
-    for i, (fpath, lineno) in enumerate(locs):
-        if i < len(failures):
-            failures[i]["line"] = lineno
-            failures[i]["file"] = Path(fpath).name  # 归一为纯文件名
+        payload = m.group(2)
+        failures.append({"nodeid": payload, "file": payload.split("::")[0], "line": None, "message": ""})
+        kinds.append(m.group(1))
+    # 2) pytest的ERRORS与FAILURES分区分别保留原顺序；同文件的异常也可能来自实现文件。
+    locations: dict[str | None, list] = {None: [], "ERROR": [], "FAILED": []}
+    error_messages: list[list[str]] = []
+    section = None
+    for line in out.splitlines():
+        heading = re.fullmatch(r"=+\s+(.+?)\s+=+", line)
+        if heading:
+            section = {"ERRORS": "ERROR", "FAILURES": "FAILED"}.get(heading.group(1), "IGNORE")
+        if section == "IGNORE":
+            continue
+        if section == "ERROR" and re.match(r"^_+ ERROR\b", line):
+            error_messages.append([])
+        location = LOC_LINE.match(line)
+        if location:
+            locations[section].append(
+                (location.group(1).replace("\\", "/"), int(location.group(2)), location.group(3))
+            )
+        if section == "ERROR" and line.startswith("E "):
+            if not error_messages:
+                error_messages.append([])
+            error_messages[-1].append(line[2:].strip())
+    for failure, kind in zip(failures, kinds):
+        detail = ""
+        available = locations[kind] or locations[None]
+        if available:
+            path, line, detail = available.pop(0)
+            failure["line"] = line
+            failure["file"] = path.rsplit("/", 1)[-1]
+        if kind == "ERROR" and error_messages:
+            error_detail = "\n".join(error_messages.pop(0))
+            detail = detail or error_detail
+        payload = failure["nodeid"]
+        # 参数ID允许空格、分隔符和未配对括号。优先用真实异常识别消息边界，
+        # 不把参数里的“ - ”当错误；短摘要的省略消息仍使用完整traceback。
+        separator = None
+        for match in re.finditer(" - ", payload):
+            message = payload[match.end() :]
+            if detail and (
+                message == detail or (message.endswith("...") and detail.startswith(message[:-3]))
+            ):
+                separator = match.start()
+                break
+        if separator is None:
+            separator = payload.find(" - ", payload.rfind("]") + 1)
+        failure["nodeid"] = (payload if separator < 0 else payload[:separator]).strip()
+        failure["message"] = detail.strip() or ("" if separator < 0 else payload[separator + 3 :].strip())
+        if failure["line"] is None:
+            failure["file"] = failure["nodeid"].split("::")[0]
     # 3) 计数与统计行
     summary = out.strip().splitlines()[-1] if out.strip() else ""
-    m_p = STAT_PASSED.search(out)
-    m_f = STAT_FAILED.search(out)
-    m_e = STAT_ERROR.search(out)
+    m_p = STAT_PASSED.search(summary)
+    m_f = STAT_FAILED.search(summary)
+    m_e = STAT_ERROR.search(summary)
     passed = int(m_p.group(1)) if m_p else (0 if m_f or m_e else None)
-    failed = int(m_f.group(1)) if m_f else (int(m_e.group(1)) if m_e else 0)
+    failed = (int(m_f.group(1)) if m_f else 0) + (int(m_e.group(1)) if m_e else 0)
     return {
         "ok": exit_code == 0,
         "exit_code": exit_code,

@@ -1,0 +1,3 @@
+run_tests 有红: 2 failed, 34 passed
+- backend/tests/test_real_repository_resume.py::test_resume_reads_current_file_after_last_action_failed[write_file] (test_real_repository_resume.py:50): AssertionError: A failed action must allow a fresh read after resume
+- backend/tests/test_real_repository_resume.py::test_resume_reads_current_file_after_last_action_failed[edit_file] (test_real_repository_resume.py:50): AssertionError: A failed action must allow a fresh read after resume

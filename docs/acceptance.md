@@ -1,5 +1,7 @@
 # 原计划逐项验收
 
+2026-10-26反馈通道追加修复：本地358PASS/1SKIP、88.01%；pytest反馈与读取预算共15项新回归，最后有限独立复核无新确定P1/P2。最终源码同题模型复验内存预检未启动，仍待验证。详见[修复报告](pytest-feedback-2026-10-26.md)和[机器证据](evidence/pytest-feedback-2026-10-26.json)；云CI须核对本次精确提交，旧结果不证明新源码。
+
 2026-10-26更新：最新失败恢复修复与[真实仓库单次验收](real-repository-2026-10-26.md)已纳入此次发布包。2026-10-25真实模型固定集为2/3，旧3/3仍是历史版本证据。本次源码身份/发布前门禁见[来源报告](evidence/publication-source-2026-10-26.json)，云CI以[对应提交工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)为准；下文旧日期的“本次/当前”只指该日期的验收，不能替代最新验证。
 
 目标依据是[已批准设计](superpowers/specs/2026-10-19-engineering-hardening-design.md)及[实施总计划](superpowers/plans/2026-10-19-engineering-hardening.md)：零新增费用、可由他人自部署的单Agent代码修复应用。最初调研中的多Agent、Redis队列、RAG等已在批准设计中排除，不是待补的必选项。

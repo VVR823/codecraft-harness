@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-26",
+  "status": "locally verified; model preflight blocked; publication pending",
+  "app_sha256": "dc6079149a59d027296104803ddaf2c6d81e9910dbdc0020121e625f8e0e65cc",
+  "changed_preexisting_business": [
+    "backend/app/tools/registry.py",
+    "backend/app/verifier/pytest_runner.py"
+  ],
+  "new_tests": {
+    "pytest_feedback": 12,
+    "read_budget": 3,
+    "total": 15
+  },
+  "associated_passed": 67,
+  "final_windows": {
+    "passed": 358,
+    "skipped": 1,
+    "seconds": 90.28,
+    "coverage_percent": 88.01,
+    "warnings": 0,
+    "ruff": "passed",
+    "formatted_files": 105,
+    "mypy_modules": 14
+  },
+  "red": {
+    "initial_parser_failed": 6,
+    "location_review_failed": 2,
+    "read_budget_failed": 3,
+    "parameter_separator_failed": 2,
+    "bracket_and_truncated_detail_failed": 2
+  },
+  "review": "One final limited independent review; parameter delimiter finding reproduced and fixed; no remaining definite P1/P2 in reviewed scope.",
+  "real_repository_feedback": {
+    "unchanged_failed": 2,
+    "unchanged_passed": 34,
+    "failures_before": 0,
+    "failures_after": 2,
+    "test_line": 50,
+    "test_assertion_visible": true
+  },
+  "parser_only_comparison": {
+    "run_id": "0c9e9903f30e",
+    "status": "budget_paused",
+    "verified": false,
+    "duration_s": 480.362,
+    "harness_app_sha256": "cac94d839b6f63ff9e055f1786aec714f6c50f193406d4f410241e44d3d4cd60",
+    "task_base_commit": "1d10f7540fd74c7ca4dba29224b71e83274c457e",
+    "calls": {
+      "tokens": 20049,
+      "calls": 8,
+      "unknown_calls": 0
+    },
+    "actions": 6,
+    "patch_bytes": 0,
+    "model_requests": "one task; no recovery or retry task",
+    "api_fees": 0,
+    "repeat": 1,
+    "retries": 0
+  },
+  "latest_source_model_check": {
+    "status": "not_started_preflight_blocked",
+    "free_memory_gib": 5.73,
+    "minimum_memory_gib": 5.8,
+    "model_requests": 0,
+    "server_started": false,
+    "automatic_retry": false,
+    "verified": null
+  },
+  "actual_model_history": {
+    "runs": 5,
+    "known_tokens": 89452,
+    "unknown_calls": 2,
+    "verified_successes": 0,
+    "api_fees": 0,
+    "note": "These real-repository runs span dated sources/configuration problems; not a controlled stable success rate."
+  },
+  "protection": {
+    "original_head": "5b05f04ef8c105764a5f6e295ee1f67b2af4b054",
+    "index_empty": true,
+    "real_db_sha256_unchanged": "8f8b25a8797f16bfbc3862ebb4f95ea09d00e966e791a11352297d73a58d6078",
+    "user_file_untouched": true,
+    "previous_owned_server_stopped": true
+  },
+  "cloud_ci": "pending for this source; old CI does not prove current source",
+  "not_claimed": [
+    "Stable model repair success",
+    "Long-horizon reliability",
+    "Current-source real-repository repair success"
+  ],
+  "new_paid_services": false
+}

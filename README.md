@@ -6,6 +6,8 @@
 
 **零费用体验从离线演示开始。** 离线T1/T2/T3使用固定公开脚本，无密钥、无模型请求。真实任务可连接自己已有的本地模型服务，不依赖免费API额度。2026-10-20历史版本在同7B低内存配置下固定三任务各一次通过，补丁已独立复验；T2复用前次同配置结果，详见[固定集报告](docs/evidence/local-7b-fixed-suite-2026-10-20.json)。2026-10-25较新源码固定集完成2/3、T3预算暂停，见[验收记录](docs/real-acceptance-2026-10-25.md)。小集合单次结果不等于任意任务稳定成功；未重跑T1/T2/T3固定集；另有2026-10-26真实仓库失败验收，全部运行及成本见独立报告。应用在自己电脑运行，另有独立只读案例页，不提供匿名公网代码执行。
 
+2026-10-26追加修复：pytest长名称、参数分隔符和异常反馈完整保留；大文件读取将导航提示计入6000字符上限。最终本地358PASS/1SKIP、覆盖率88.01%，独立有限复核无新确定P1/P2。真实仓库此前仍失败，最终源码模型复验因内存预检未启动，不能标为通过。见[反馈修复报告](docs/pytest-feedback-2026-10-26.md)与[精确提交云CI](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)。
+
 2026-10-26最新修复：失败编辑追加恢复提示，同一文件每段连续3次修改失败即持久化暂停；人工恢复可重新读取，绝对/相对路径共用计数。发布前Windows门禁和本次云CI分别见[交付证据](docs/evidence/publication-source-2026-10-26.json)与[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)。真实仓库单次验收见[独立报告](docs/real-repository-2026-10-26.md)，不宣称任意任务稳定成功。
 
 历史本地自检（2026-10-22）：修复11处可复现问题；Windows 332PASS/1SKIP、覆盖率87.69%，Linux 333PASS/0SKIP、87.80%，均无告警；JS 8PASS。真实浏览器离线任务、刷新恢复、导出补丁回放和桌面/手机检查通过；当前源码容器非root冒烟通过，复用已有镜像依赖，未联网重建基础层。详见[自检报告](docs/self-audit-2026-10-22.md)。本次源码同步包含这些修复，对应云CI结果见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)；2026-10-21云CI、完整Docker构建/保卷重建及真实模型固定集按历史版本分别保留。
