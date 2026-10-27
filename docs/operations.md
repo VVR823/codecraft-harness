@@ -6,7 +6,7 @@
 
 准备自己已有的OpenAI兼容本地模型服务，不自动安装或下载模型。模型地址和名称由操作者配置；本地模式只允许loopback端点，不会转到付费服务。
 
-本机已有7B采用低内存CPU配置后，T2已真实完成并经导出补丁独立复验，原4测试通过、7798 token、约121秒。具体准备、启动、健康检查、单次运行和退出步骤见[低内存本地模型指南](low-memory-local-model.md)。早期GPU/CPU加载失败及3B未完成记录仍保存在[真实验收记录](local-acceptance-2026-10-20.md)，不能当作当前唯一结论，也不能与不同版本合并计算成功率。
+历史7B低内存CPU配置下，T2曾完成并经导出补丁独立复验，原4项测试通过、7798 token、约121秒。具体准备、启动、健康检查、单次运行和退出步骤见[低内存本地模型指南](low-memory-local-model.md)。不同模型和源码版本的结果必须分开解释，汇总口径见[评测结果](evaluation.md)。
 
 以下为普通本地服务配置与自带源码模板，替换成自己的路径和模型：
 
@@ -16,7 +16,7 @@ $env:CODECRAFT_MODEL = '你的已有模型名'
 .\.venv\Scripts\python.exe scripts/drive_task.py t1_single_fix --mode local --workspace D:\your-project --goal '修复已有测试暴露的问题' --data-dir .\data-local
 ```
 
-`--workspace`明确授权读取该本地目录，执行发生在其副本；Web只选择内置任务，不允许提交任意宿主路径。源码项目需要可在当前Python环境运行的pytest测试；不自动安装项目依赖。GitHub交付另需显式`--github --workspace <干净独立仓库>`、可用Git/gh及操作者已有凭证；副本保留来源提交历史，源仓库不变。拒绝Git worktree的.git指向文件和origin中嵌入的凭证。GitHub模式会产生远端副作用；2026-10-25已在专用合成夹具分支完成真实工具交付，见[新版验收](real-acceptance-2026-10-25.md)。固定控制器通过不代表模型自主交付。
+`--workspace`明确授权读取该本地目录，执行发生在其副本；Web只选择内置任务，不允许提交任意宿主路径。源码项目需要可在当前Python环境运行的pytest测试；不自动安装项目依赖。GitHub交付另需显式`--github --workspace <干净独立仓库>`、可用Git/gh及操作者已有凭证；副本保留来源提交历史，源仓库不变。拒绝Git worktree的.git指向文件和origin中嵌入的凭证。GitHub模式会产生远端副作用；专用合成夹具验证见[评测结果](evaluation.md)。固定控制器通过不代表模型自主交付。
 
 ## 显式启用本地结构化决策
 
@@ -32,7 +32,7 @@ $env:CODECRAFT_MODEL_TIMEOUT = '300'
 
 开启后发送thought/tool/args/done的JSON Schema，仍保留AgentStep解析、工具参数校验、权限与原测试保护。offline_demo/remote开启该选项会明确拒绝；本地服务不支持Schema而返回错误时，保留诊断和未知用量并暂停，不静默降级重发。Schema约束结构，不保证模型能提出正确修复。
 
-早期Schema接入后的3B/T1曾因精确编辑失败而预算暂停，记录见[结构化输出记录](local-structured-output-probe-2026-10-20.md)。随后T1/T2/T3分别有真实成功记录，但模型和源码版本不同；最新状态以[逐项验收](acceptance.md)为准，Schema本身不保证任务成功。
+Schema只约束决策结构，不保证模型能够提出正确修改。不同模型和源码版本的实测结果见[评测结果](evaluation.md)。
 
 ## 人工恢复一段
 
@@ -90,7 +90,7 @@ $env:CODECRAFT_MODEL_TIMEOUT = '300'
 .\.venv\Scripts\python.exe -m app.store.migrations .\data\harness.db --backup-dir .\data-backups
 ```
 
-命令用SQLite backup API生成唯一备份并检查完整性，然后事务升级v0到v2；已有v2不重复迁移。失败保留备份，schema改动回滚。本轮仅在临时旧结构库验证，未迁移仓库真实数据。迁移保留历史记录，但不补造旧run的工作区或验证证据。恢复备份时停服，把备份复制到**新的数据目录**，避免覆盖正在用的库；指向该目录检查后再决定切换。
+命令用SQLite backup API生成唯一备份并检查完整性，然后事务升级v0到v2；已有v2不重复迁移。失败保留备份，schema改动回滚。迁移逻辑使用临时旧结构库验证，不修改仓库附带的数据。迁移保留历史记录，但不补造旧run的工作区或验证证据。恢复备份时停服，把备份复制到**新的数据目录**，避免覆盖正在用的库；指向该目录检查后再决定切换。
 
 ## 配置参考
 
@@ -103,7 +103,7 @@ $env:CODECRAFT_MODEL_TIMEOUT = '300'
 | CODECRAFT_MODEL | local-model；1–128字符 |
 | CODECRAFT_BASE_URL | 空；local仅loopback http(s)，不允许凭证/query/fragment |
 | CODECRAFT_API_KEY | 空；SecretStr，不通过API返回 |
-| CODECRAFT_ALLOW_REMOTE | false；本轮不启用 |
+| CODECRAFT_ALLOW_REMOTE | false；默认不启用 |
 | CODECRAFT_TOKEN_BUDGET | 30000；1–1000000 |
 | CODECRAFT_MODEL_TIMEOUT / SANDBOX_TIMEOUT | 120秒；1–600 |
 | CODECRAFT_API_TOKEN | 空；设置后所有/api路由要求Bearer |
@@ -132,7 +132,7 @@ remote明确开启且未给CODECRAFT_API_KEY时才兼容ZHIPU_API_KEY；模型�
 
 ## Docker部署
 
-2026-10-21已在本机WSL2/Ubuntu/Docker实际完成构建、UID10001运行、离线任务/导出及保卷重建。完整`/data`卷保存DB、workspace、baseline、original及manifest。构建上下文按应用/内置任务/UI/必要脚本允许列表选择，不复制整个backend目录或运行数据。详细证据见[容器实测说明](container-validation-2026-10-21.md)。以下在Linux或WSL内的仓库根目录执行：
+容器验收已覆盖构建、UID10001运行、离线任务、导出和保卷重建。完整`/data`卷保存DB、workspace、baseline、original及manifest。构建上下文按应用、内置任务、UI和必要脚本的允许列表选择，不复制整个backend目录或运行数据。结果索引见[评测结果](evaluation.md)。以下在Linux或WSL内的仓库根目录执行：
 
 ```sh
 docker compose --env-file /dev/null up --build

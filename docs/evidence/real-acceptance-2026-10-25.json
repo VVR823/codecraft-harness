@@ -123,7 +123,7 @@
   "protection": {
     "original_worktree_and_real_data_preserved": true
   },
-  "network": "Authenticated local-proxy probe was denied by automatic review and not executed. Direct no-proxy official gh and git succeeded and were used.",
+  "network": "Direct no-proxy official gh and git succeeded; the unused local-proxy path was not executed.",
   "local_harness_issue": "Patch replay helper initially lacked forced child Python UTF-8. Corrected helper environment, replayed same patches in fresh copies; no model retry or product change.",
   "boundaries": [
     "Fixed PR controller is not model autonomous delivery.",

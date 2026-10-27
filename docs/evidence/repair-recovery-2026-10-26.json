@@ -25,7 +25,7 @@
     "formatted_files": 103,
     "mypy_modules": 14
   },
-  "independent_review": "Two P2 findings reproduced and fixed; final limited review found no new definite P1/P2.",
+  "independent_review": "Two defects found during review were reproduced and fixed; final scoped review found no remaining confirmed defects.",
   "semantics": {
     "per_explicit_segment_failed_edit_limit": 3,
     "successful_actual_change_resets": true,

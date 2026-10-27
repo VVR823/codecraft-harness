@@ -1,83 +1,117 @@
 # CodeCraft Harness
 
-[公开案例页](https://vvr823.github.io/codecraft-harness/)（GitHub Pages，只读）
+[![Offline quality](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-一个可自部署的单 Agent 代码修复工作台：模型逐步使用工具，执行原始测试，保存动作、用量和断点，再交付可核查的修改。保留自研循环，使用 Python、FastAPI、SQLite 和原生 JS。
+[在线案例](https://vvr823.github.io/codecraft-harness/) · [架构说明](docs/architecture.md) · [评测结果](docs/evaluation.md)
 
-**零费用体验从离线演示开始。** 离线T1/T2/T3使用固定公开脚本，无密钥、无模型请求。真实任务可连接自己已有的本地模型服务，不依赖免费API额度。2026-10-20历史版本在同7B低内存配置下固定三任务各一次通过，补丁已独立复验；T2复用前次同配置结果，详见[固定集报告](docs/evidence/local-7b-fixed-suite-2026-10-20.json)。小集合单次结果不等于任意任务稳定成功；2026-10-25新版已复测，固定集2/3完成、T3预算暂停，详见[新版验收](docs/real-acceptance-2026-10-25.md)。应用在自己电脑运行，另有独立只读案例页，不提供匿名公网代码执行。
+CodeCraft Harness 是一个面向可信 Python 项目的单 Agent 代码修复工作台。模型在隔离副本中读取源码、修改实现并运行原始测试；系统负责权限控制、预算计量、断点恢复、结果审计和补丁导出。
 
-2026-10-27最新修复：补齐恢复链路中的源码导航、测试断言上下文和失败后的有界续读。本地完整门禁412PASS/1SKIP、覆盖率88.93%，Ruff、格式和mypy均通过；本地7B真实模型长任务仍因预算暂停且没有生成补丁，保留为未通过，不能标成模型修复成功。详见[本轮验收记录](docs/recovery-navigation-and-real-model-2026-10-27.md)。
+项目关注的不是“让模型生成一段代码”，而是代码修复任务中更难处理的工程问题：如何保证原测试不可篡改，如何在进程中断后判断工具是否执行，如何限制模型成本，以及如何把一次修复变成可以复查和重放的交付物。
 
-历史本地自检（2026-10-22）：修复11处可复现问题；Windows 332PASS/1SKIP、覆盖率87.69%，Linux 333PASS/0SKIP、87.80%，均无告警；JS 8PASS。真实浏览器离线任务、刷新恢复、导出补丁回放和桌面/手机检查通过；当前源码容器非root冒烟通过，复用已有镜像依赖，未联网重建基础层。详见[自检报告](docs/self-audit-2026-10-22.md)。修复已同步至GitHub提交[1d10f75](https://github.com/VVR823/codecraft-harness/commit/1d10f7540fd74c7ca4dba29224b71e83274c457e)，新[云CI](https://github.com/VVR823/codecraft-harness/actions/runs/39806564977)三项通过；2026-10-21云CI、完整Docker构建/保卷重建及真实模型固定集按历史版本分别保留。
+## 核心能力
 
-历史同版通用3B固定集完成1/3；首次代码3B对照完成0/2。失败证据不覆盖，代码模型T1尚未测试，不能将不同版本的单项结果拼成当前完整集合通过。
+- 每次运行使用独立的 `workspace / baseline / original` 三份文件，分别承载可修改源码、冻结测试和初始版本。
+- `done` 必须满足结构化完成条件：原测试通过、至少执行一项测试，且验证晚于最后一次有效修改。
+- 模型调用先记录意图，再结算已知 token；用量未知或达到预算时暂停，不按零成本处理。
+- 工具动作、trace、checkpoint 和运行状态事务化保存；副作用不确定时不自动重放。
+- 支持显式恢复、有限预算扩额、工作区漂移检测、失败编辑熔断和脱敏补丁导出。
+- CLI、FastAPI 和原生 JavaScript 控制台共用同一运行服务。
+- 可选接入 OpenAI 兼容的本地模型、MCP 工具、Skills、planner 和长期记忆；默认离线模式不调用模型。
 
-## 三步看到第一次修复
+## 运行流程
 
-在已获取仓库的根目录打开 PowerShell，准备 Python 3.13：
+```text
+CLI / Web
+   │
+RunService ── 文件锁 + SQLite 状态机
+   │
+HarnessLoop ── 模型决策 / 离线演示决策
+   │
+ToolRegistry ── 读写源码 / pytest / 可选 MCP
+   │
+动作记录 + trace + checkpoint + 补丁导出
+```
 
-1. 安装锁定运行依赖（下载的是免费开源库）：
+详细的数据边界、事务窗口和停止条件见[架构说明](docs/architecture.md)。
 
-   ```powershell
-   cd backend
-   py -3.13 -m venv .venv
-   .\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.txt
-   ```
+## 快速开始
 
-2. 运行不调用模型的演示，使用新的数据目录：
+需要 Python 3.13。以下命令不会调用模型，也不需要 API Key。
 
-   ```powershell
-   .\.venv\Scripts\python.exe scripts/drive_task.py t1_single_fix --mode offline_demo --data-dir .\data-demo
-   ```
+```powershell
+cd backend
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.txt
+.\.venv\Scripts\python.exe scripts/drive_task.py t1_single_fix --mode offline_demo --data-dir .\data-demo
+```
 
-   预期 `status=done verified=True`。修改保存在输出的 `workspace` 路径，源任务保持不变。若提示历史库需迁移，换新目录体验，或按操作文档显式备份迁移。
+成功时输出包含 `status=done verified=True`。修改发生在输出所示的私有工作区，内置源任务保持不变。
 
-3. 打开工作台：
+启动本地控制台：
 
-   ```powershell
-   $env:CODECRAFT_DATA_DIR = '.\data-demo'
-   $env:CODECRAFT_MODE = 'offline_demo'
-   .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
-   ```
+```powershell
+$env:CODECRAFT_DATA_DIR = '.\data-demo'
+$env:CODECRAFT_MODE = 'offline_demo'
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
+```
 
-   浏览器访问 `http://127.0.0.1:8000/console/`，提交任务、查看trace、下载结果。历史记录刷新不会重复创建任务。Linux使用 `python3.13 -m venv .venv` 和 `.venv/bin/python`；本地Linux容器已通过Python质量门禁，云端 CI 由 GitHub Actions 持续验证，实际状态见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)。
+浏览器打开 `http://127.0.0.1:8000/console/`。Linux 将解释器路径替换为 `.venv/bin/python`。完整配置、恢复、导出和 Docker 命令见[操作指南](docs/operations.md)。
 
-已有 uv 的开发者可在backend执行 `uv sync --locked --group dev`。当前主要依赖已经锁定，版本与哈希以 `uv.lock` 为准。
+## 工程验证
 
-## 这次优化补了什么
+截至 2026-10-27，当前源码的本地完整门禁结果为：
 
-- CLI/API共用运行服务，每run独立源码副本，冻结原测试与配置。
-- `done`要求结构化测试通过，并晚于最后一次成功修改；零动作、零测试不能直接完成。
-- 模型调用先记意图，成功与失败成本保留；用量未知暂停，预算批准是有限扩额。
-- 动作结果、trace、checkpoint同事务保存；中断窗口不自动重放未知副作用。
-- 失败编辑有恢复提示；同一文件每段连续3次修改失败即暂停，保留现场供人工调整后恢复。
-- 文件锁与数据库状态约束同run执行权；重启不自动续跑，旧run缺基线时只读。
-- 可选Bearer鉴权、有界限流、输入限制、结构日志、依赖锁与本地质量门禁。
-- 原生控制台、只读案例、JSON/Markdown评测和脱敏相对补丁导出。
-
-普通修复不需要Git仓库。可选Skills、planner、MCP、长期记忆默认关闭；HIGH工具仍拒绝，不实现通用高危工具放行。
-
-## 文档与验证
-
-| 入口 | 内容 |
+| 项目 | 结果 |
 | --- | --- |
-| [运行操作](docs/operations.md) | 本地模型、自带源码、人工恢复、配置/API、迁移、导出与Docker模板 |
-| [低内存本地模型](docs/low-memory-local-model.md) | 复用已有7B权重，启动CPU服务、检查加载、显式验收及退出 |
-| [架构说明](docs/architecture.md) | 执行循环、工作区、事务窗口、预算及取舍 |
-| [全面自检](docs/self-audit-2026-10-22.md) | 本轮11项缺陷、实际浏览器与双平台验证 |
-| [测试说明](docs/testing.md) | 本地门禁、评测命令、故障回归与证据边界 |
-| [云端验证与发布](docs/cloud-publication-2026-10-21.md) | 公网案例页、源码和云 CI 入口 |
-| [本轮交付记录](docs/delivery-2026-10-19.md) | 实际检查、未执行项、审查结果 |
-| [原计划逐项验收](docs/acceptance.md) | 22项原始验收条件、证据与环境限制 |
-| [恢复链路与真实模型验收](docs/recovery-navigation-and-real-model-2026-10-27.md) | 本轮源码导航、完整门禁和真实7B结果 |
-| [静态案例](showcase/README.md) | 独立只读网页，不连接任务API |
+| Python 测试 | 412 passed，1 skipped |
+| 覆盖率 | 88.93% |
+| 静态检查 | Ruff、113 个文件格式检查、14 个 mypy 模块通过 |
+| 前端测试 | Node 测试 8 passed |
+| 云端流水线 | Windows、Linux、容器任务通过 |
 
-开发门禁：在backend运行 `.\.venv\Scripts\python.exe scripts/check.py`，包括ruff、格式、mypy和pytest-cov。默认离线suite：`python -m app.bench --mode offline_demo --data-dir .\data-bench --output .\reports\offline`。报告保留每次尝试，离线结果不得改标为真实模型成功率。
+真实模型结果与工程门禁分开记录：固定小任务曾在同一 7B 配置下各完成一次并完成补丁重放；新版固定集为 2/3；更复杂的真实仓库恢复任务在预算内未生成有效补丁。这里不把小样本结果写成稳定成功率，也不把离线脚本演示写成模型能力。完整口径和证据索引见[评测结果](docs/evaluation.md)。
 
-## 使用边界
+## 开发与部署
 
-测试会执行Python代码，只用于可信源码。复制目录、冻结测试、环境白名单和进程树超时清理能减少误操作，无法隔离恶意代码或阻断其网络访问。默认单worker、本机监听、最多2个并行run；不作为多租户或匿名SaaS部署。
+安装开发依赖后，在 `backend` 目录运行统一门禁：
 
-真实模型修复产物与run完成状态分别记录，不承诺任意模型或任务都能成功。已实测Docker构建/持久卷重建和本地Linux Python门禁；此次未调用远端模型；公开源码和静态案例页已经发布。云 CI 实际状态见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)；GitHub PR工具已用独立合成夹具真实验收通过，见[验收PR](https://github.com/VVR823/codecraft-harness/pull/1)；固定控制器不代表模型自主交付。容器离线演示不算真实模型成绩，具体范围见逐项验收。九月报告是历史证据，原数据不覆盖。
+```powershell
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.txt
+.\.venv\Scripts\python.exe scripts/check.py
+```
+
+离线评测：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.bench --mode offline_demo --data-dir .\data-bench --output .\reports\offline
+```
+
+Docker 模板默认只映射到 `127.0.0.1:8000`，数据保存在命名卷中：
+
+```sh
+docker compose up --build
+```
+
+## 项目边界
+
+- 离线模式是确定性工程演示，不代表模型可以理解任意需求。
+- 本地模型结果受模型、上下文、源码版本和预算影响，不承诺任意任务成功。
+- Python 测试仍以宿主用户权限执行；目录复制、环境白名单和超时清理不是恶意代码安全沙箱。
+- 项目定位是可信操作者使用的单机工具，不提供匿名公网代码执行服务，也不是多租户 SaaS。
+- GitHub 推送和 PR 工具会产生真实远端副作用，只应在干净、独立且明确授权的仓库副本中使用。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [架构说明](docs/architecture.md) | 运行循环、工作区、事务窗口、预算与安全取舍 |
+| [操作指南](docs/operations.md) | 本地模型、恢复、导出、配置、API 和 Docker |
+| [测试指南](docs/testing.md) | 本地门禁、功能评测和 CI 验证方式 |
+| [评测结果](docs/evaluation.md) | 当前工程质量、真实模型结果和证据边界 |
+| [低内存模型](docs/low-memory-local-model.md) | 在 CPU 环境连接已有本地 7B 服务 |
+| [静态案例](showcase/README.md) | 不连接后端的只读案例页面 |
+
+技术栈：Python、FastAPI、SQLite、Pydantic、pytest、原生 JavaScript、Docker、GitHub Actions、MCP。
 
 MIT License，见 [LICENSE](LICENSE)。

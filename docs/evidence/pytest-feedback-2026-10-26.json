@@ -29,7 +29,7 @@
     "parameter_separator_failed": 2,
     "bracket_and_truncated_detail_failed": 2
   },
-  "review": "One final limited independent review; parameter delimiter finding reproduced and fixed; no remaining definite P1/P2 in reviewed scope.",
+  "review": "A parameter delimiter defect was reproduced and fixed; final scoped review found no remaining confirmed defects.",
   "real_repository_feedback": {
     "unchanged_failed": 2,
     "unchanged_passed": 34,

@@ -55,7 +55,7 @@
         "最终文件独立核对仍2通过；保留271字节补丁，不改写run状态"
       ],
       "patch": "- return text.strip(\" \")  # bug: 只去空格，不去制表符/换行\n+ return text.strip()",
-      "tests": "最终产物2 passed；完整run仍budget_paused/verified=false。证据见docs/local-acceptance-2026-10-20.md，源码SHA256 efcc16ad984b3460995eba19ad35d8c33c90f509e793e728ff1b07c7679a6caf。"
+      "tests": "最终产物2 passed；完整run仍budget_paused/verified=false。结果口径见docs/evaluation.md，源码SHA256 efcc16ad984b3460995eba19ad35d8c33c90f509e793e728ff1b07c7679a6caf。"
     },
     {
       "title": "真实T1 · 预算内正常完成",
@@ -69,7 +69,7 @@
         "独立复核：原副本仍失败；导出补丁直接应用后2项通过，无手工补改"
       ],
       "patch": "- return text.strip(\" \")\n+ return text.strip()",
-      "tests": "done/verified=true；原2项测试通过。独立补丁重放也2 passed，原始任务与旧run未改动。证据见docs/local-acceptance-2026-10-20.md；源码SHA256 e261626efcc6af88b0874cb21732313ca0dfca302bb67844d86761ea7ded0d08。"
+      "tests": "done/verified=true；原2项测试通过。独立补丁重放也2 passed，原始任务与旧run未改动。结果口径见docs/evaluation.md；源码SHA256 e261626efcc6af88b0874cb21732313ca0dfca302bb67844d86761ea7ded0d08。"
     },
     {
       "title": "真实T2 · 低内存7B补全函数",

@@ -1,5 +1,4 @@
 .cache/
-.superpowers/
 __pycache__/
 *.pyc
 .venv/

@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-27",
+  "evidence_kind": "real local inference",
+  "task": {
+    "files": 184,
+    "baseline_tests": "2 failed, 1 passed",
+    "goal": "Repair resume-state reconstruction after a failed edit without weakening duplicate-action protection"
+  },
+  "latest_attempt": {
+    "run_id": "567899d776f9",
+    "model": "qwen2.5-coder:7b",
+    "keep_recent_steps": 3,
+    "status": "budget_paused",
+    "verified": false,
+    "known_tokens": 41049,
+    "unknown_calls": 0,
+    "actions": 18,
+    "patch_bytes": 0
+  },
+  "observation": "The model read the target function body but repeated source searches and produced no patch within the finite budget.",
+  "result": "not_passed",
+  "claim_boundary": "This result does not support a claim of reliable autonomous repair on complex repositories."
+}

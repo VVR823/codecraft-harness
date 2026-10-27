@@ -13,9 +13,8 @@
     "memory_mib": 3919,
     "cpus": 2,
     "swap_mib": 2048,
-    "runtime_path": "D:/CodeCraftEnv/WSLRuntime",
-    "distro_path": "D:/CodeCraftEnv/wsl/CodeCraftUbuntu",
-    "docker_data_location": "/var/lib/docker inside the D-drive WSL virtual disk"
+    "host_paths_redacted": true,
+    "docker_data_location": "/var/lib/docker inside the WSL virtual disk"
   },
   "source": {
     "git_base": "5b05f04ef8c105764a5f6e295ee1f67b2af4b054",
