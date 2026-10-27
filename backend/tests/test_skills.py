@@ -1,4 +1,4 @@
-"""M5-B1 Skills 注册体系单测：SKILL.md 解析 / 发现容错 / 语义匹配 / loop 注入。"""
+"""Skills 注册体系的解析、发现容错、语义匹配与运行时注入测试。"""
 
 import sys
 from pathlib import Path

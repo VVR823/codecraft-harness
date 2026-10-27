@@ -1,15 +1,15 @@
-"""自研 agent loop v0（Q11/Q13 落点）。
+"""单 Agent 代码修复执行循环。
 
 主循环（全自研，不依赖 LangGraph 状态）：
     1. 喂给决策器：系统提示 + 任务目标 + 历史步骤摘要（上下文由本文件维护）
     2. 决策器返回 AgentStep（真 LLM 或注入的 Fake，同一签名）
     3. done=True → 收尾；否则执行工具（read_file / write_file / run_tests）
-    4. 每步：工具结果落 trace（摘要），状态落 checkpoint（Q9 六字段）——断点续跑的基础
+    4. 每步将工具结果写入 trace，并保存可恢复的 checkpoint
     5. 超 MAX_STEPS → paused（等人）；决策连续失败 → failed
 
-工具权限（v0 简化）：
-- read_file / write_file 只允许落在 task_dir 内（路径穿越拦截），write 走任务包工作副本（git 管理，可还原）
-- run_tests 走轻量沙箱（复制执行，Q8）
+工具权限：
+- 文件工具只能访问任务工作区，写入发生在可恢复的副本中
+- run_tests 在复制出的临时目录执行
 """
 
 from __future__ import annotations
@@ -53,14 +53,11 @@ edit_file 的 old 必须逐字复制原文且唯一；new 只替换 old 的范�
 
 SYSTEM_PROMPT = _SYSTEM_HEAD + "\n可用工具（注册表生成，与执行校验同源）:\n" + describe_tools()
 
-# 工具结果截断上限（防上下文爆炸的 v0 防线，正式分层压缩在 context.py）
+# 单条工具结果限长；跨步骤压缩由 context.py 处理。
 TOOL_OUTPUT_CAP = 3000
 
-# ---- GitHub 交付模式（2026-09-08，对标 MyCoder GitHub mode）----
-# drive_task --github 时注入 system prompt 尾部的交付流程指引。工具本身（git_branch/
-# git_commit/git_push/gh_create_pr）已注册进 registry（权限 MED + 环境门闩），
-# describe_tools() 自动带说明书；这里补的是"何时用、按什么顺序"的流程语义——
-# 免费模型只在目标里明说要交付时才走这套（普通修复任务看不到这段指引）。
+# ---- GitHub 交付模式 ----
+# 显式开启后才向模型注入交付顺序；工具执行还受注册表权限和环境门闩约束。
 GITHUB_SYSTEM_EXTRA = """【GitHub 交付流程】（本任务已开启 --github 交付模式）
 代码修复到 run_tests 全绿后，按顺序完成交付，把改动变成 GitHub 上的一个 PR：
 1. git_branch {"branch": "<描述性分支名，如 fix/split-csv-quoting>"} —— 从当前 HEAD 新建分支并切换
@@ -72,11 +69,8 @@ PR 创建成功（输出含 github.com 链接）后，输出 done 收尾。交�
 不需要在交付后再跑 run_tests（最后一次写文件后的全绿已验证过）。
 若某一步失败，工具会返回具体原因，先 read_file / git 状态确认再重试，不要盲目重复同一步。"""
 
-# ---- O4 空转雷达（2026-09-05）----
-# 免费模型在长上下文/高压下会"原地打转"：连续只 read_file 不写不测（B6a 补测实证：
-# T2 plan 档 step1~5 全读 test_module.py，空转 35k token 才被预算护栏截停）。
-# 雷达 = 连续 STALL_LIMIT 个动作全是零进展工具 → 触发。纯观测默认开（只记 trace + 日志，
-# 不改执行流 → 数字① 口径零影响）；stall_warning=True 时才把提醒注入上下文（长任务按需开）。
+# ---- 空转检测 ----
+# 连续侦察但没有写入或测试时记录 trace；只有显式开启 stall_warning 才注入提醒。
 STALL_LIMIT = 3  # 连续多少个零进展动作判空转
 PROGRESS_TOOLS = (
     "edit_file",
@@ -86,18 +80,15 @@ PROGRESS_TOOLS = (
     "git_commit",
     "git_push",
     "gh_create_pr",
-)  # 能推进/验证任务的动作
-# （git 四件套算进展：交付尾巴 branch→commit→push→pr 连续 4 步不该被空转雷达误报）
+)  # 能推进或验证任务的动作，包含完整 GitHub 交付链
 STALL_MSG = (
     "（系统提醒）你已连续 {n} 步只做侦察（{tools}）没有写文件或跑测试。"
     "如果已掌握足够信息，请按文件大小选择 write_file/edit_file 修改实现或 run_tests 验证，别再只读。"
 )
 
-# ---- 顺序翻页护栏（T4 run7 实证，2026-09-07）----
-# 模型在真实库大文件上会"从头逐页通读"：1-100 → 100-199 → 200-299 一路翻到底，
-# 无视空转雷达提醒与 search_file 引导（T4 第七次 run：600 行 test_regression.py
-# 翻了 4 页后上下文臃肿，第 5 次决策 JSON 崩坏整局 failed）。该模式与 dup 拦截
-# 互补：dup 拦"同区间重复读"，本护栏拦"区间顺序前进的翻页 walk"。
+# ---- 顺序翻页护栏 ----
+# 连续逐页读取大文件会快速挤占上下文。该规则与重复读取拦截互补：一个限制
+# 顺序翻页，另一个限制完全相同的读取。
 PAGE_WALK_LIMIT = 3  # 同文件连续顺序翻页 ≥3 页（仍无写/测）→ 拦截一次
 PAGE_WALK_MSG = (
     "检测到你正在逐页顺序通读 {path}（已连续第 {n} 页仍是纯读取，"
@@ -148,28 +139,24 @@ class HarnessLoop:
         use_github: bool = False,
         registry: ToolRegistry | None = None,
     ):
-        """token_budget: 单 run token 上限（None=不启用护栏，默认无护栏）。
+        """token_budget: 单 run token 上限（None=不启用护栏）。
         meter: 外部共享的 token 计量 dict（decider 包装层累加 meter["tokens"]，
-        loop 只读判断是否超限）——计量与决策解耦，任何 decider 都能挂护栏。
-        context_compress: M3 分层压缩开关（Q14）——开=旧步压成一行摘要只影响
+        loop 只读判断是否超限），计量与决策保持解耦。
+        context_compress: 分层压缩开关。旧步骤压成摘要只影响
         decider 视图，self.messages 仍全量存档（checkpoint/resume 不丢信息）。
-        use_plan: M4 planner 开关——开=进入执行前先调一次 planner（同一 decider
-        通道），计划注入初始 user 消息随 checkpoint 持久化；resume 不重规划。
-        stall_warning: O4 空转雷达的主动提醒开关——默认 False（雷达纯观测：trace+
-        日志，不改执行流）；True=空转时把提醒注入上下文（长任务按需开）。
-        use_skills: M5 Skills 开关——开=按 goal 语义匹配 skills/ 目录里的 SKILL.md，
-        把命中技能指令注入 system prompt 尾部（随 checkpoint 持久化，resume 一致）。
-        skill_dir: skills 仓库根目录（目录/文件可复用，默认 skills/）。默认关→数字①口径不动。
-        use_mcp: M5 MCP 开关——开=启动时连 MCP server(s)（自研 stdio client），
-        tools/list 拉到的工具动态注册进注册表（mcp_<server>__<tool>），system prompt
-        工具说明书自动带上。mcp_servers: [{"name": ..., "cmd": [...]}]；缺省用
-        spawn_client 的默认 demo server。默认关→数字①口径不动。
-        use_memory: M5 长期记忆开关——开=run 开始时注入该任务历史记忆（经验复用），
-        run 结束沉淀新记忆（成功路径/失败教训）。默认关→数字①口径不动。
-        use_github: GitHub 交付模式开关——开=system prompt 尾部注入交付流程指引
-        （git_branch→commit→push→gh_create_pr），把"自修到全绿"升级为"自修到 PR"。
-        工具执行靠 registry handler 内的 HARNESS_GITHUB 环境门闩放行（drive_task
-        --github 会置位），loop 只负责注入指引；默认关→基线 run 的提示词不含交付段。
+        use_plan: planner 开关。执行前通过同一 decider 通道规划一次，计划注入
+        初始 user 消息并随 checkpoint 持久化；resume 不重规划。
+        stall_warning: 空转主动提醒开关。默认只记录 trace 和日志；开启后注入提醒。
+        use_skills: 按 goal 匹配 skills/ 目录中的 SKILL.md，并将命中内容注入
+        system prompt 尾部（随 checkpoint 持久化，resume 一致）。
+        skill_dir: skills 根目录（默认 skills/）。
+        use_mcp: 启动时连接 MCP server，并将 tools/list 返回的工具动态注册进
+        注册表（mcp_<server>__<tool>）；system prompt 自动包含工具说明。
+        mcp_servers: [{"name": ..., "cmd": [...]}]；缺省用
+        spawn_client 的默认 demo server。
+        use_memory: run 开始时注入任务历史记忆，结束时沉淀成功路径或失败经验。
+        use_github: 注入 branch→commit→push→PR 的交付流程；工具执行仍由
+        registry 中的 HARNESS_GITHUB 门闩控制。
         """
         self.workspace = Path(task_dir)
         self.registry = registry or ToolRegistry()
@@ -194,19 +181,16 @@ class HarnessLoop:
         self.use_plan = use_plan
         self.messages: list[dict] = []
         self.done_actions: list[dict] = []
-        # 强制验证护栏（Day6）：记录"最后一次写文件"与"最后一次全绿测试"的步号，
-        # 模型在写码后未跑出全绿就宣称 done 时拒绝收尾（免费模型"写完就飘"的常见病）
+        # 记录最后一次写入和最后一次通过验证的步骤，拒绝未经复测的完成声明。
         self._last_write_step = -1
         self._last_green_test_step = -1
         # 重复动作护栏：记录上一步 (tool, args)，写类工具连续提交完全相同动作时拦截
         self._prev_action: dict | None = None
-        # 预算护栏：人工批准续跑后置 True，本轮不再因超限暂停（"人已放行"语义）
+        # 当前执行段获准扩额后，不再用旧预算重复暂停。
         self._budget_approved = False
-        # O4 空转雷达：_stall_warned_at 记录上次提醒/复位时的动作计数位置，
-        # 零进展再满 STALL_LIMIT 步即再次提醒（周期式，非整段一次；T4 run12/14
-        # 实证 search 轰炸 14 步只提醒一次拉不回来）；出现进展动作即复位到当前。
+        # 记录上次空转提醒位置；出现进展后复位，持续空转则周期性提醒。
         self._stall_warned_at = 0
-        # 顺序翻页护栏：path -> {"consec": 连续顺序翻页数, "end": 上次页末行}（T4 run7 实证补）
+        # path -> {"consec": 连续顺序翻页数, "end": 上次页末行}
         self._page_walk: dict[str, dict] = {}
         self._pending_action = None
 
@@ -234,8 +218,7 @@ class HarnessLoop:
             if t["result"].get("ok"):
                 self._prev_action = {"tool": t["tool"], "args": t["args"], "step": t["step"]}
 
-    # ---------- 对外入口 ----------
-    # ---------- 长期记忆（M5-B3） ----------
+    # ---------- 对外入口与长期记忆 ----------
     def _maybe_distill(self, result: dict) -> None:
         """run 终态（done/failed）时沉淀长期记忆；paused/budget_paused 可续跑不沉淀。"""
         if not self.use_memory:
@@ -252,15 +235,14 @@ class HarnessLoop:
     def run(self) -> dict:
         """从头执行一次 run。
 
-        M4 planner：use_plan 且本 run 尚无计划 → 先进 plan phase（一次规划调用），
-        计划注入初始 user 消息（goal 之后）→ 随 checkpoint 持久化。产出即 save_plan
-        （原子，进程若被杀在 plan phase，resume 走 run() 时 get_plan 已有行 → 不重规划）。
+        use_plan 且本 run 尚无计划时先执行一次规划调用。计划注入初始 user 消息并
+        随 checkpoint 持久化；若规划完成后进程中断，恢复时复用已有计划。
         db 行已存在（resume 转发：从未执行过任何步 / 杀在 plan phase）→ 复用不重建。
         """
         if db.get_run(self.run_id) is None:
             db.create_run(self.run_id, self.task_id, self.goal)
         db.update_run_status(self.run_id, "running")
-        self._setup_mcp()  # M5-B2：MCP server(s) 接入（幂等；失败降级不拖垮 run）
+        self._setup_mcp()  # 幂等连接 MCP；单个服务失败不会拖垮运行
         try:
             self.messages = self._initial_messages(self.goal, fresh=True)
             if self.use_plan:
@@ -276,17 +258,17 @@ class HarnessLoop:
                     self.messages[1] = dict(self.messages[1])
                     self.messages[1]["content"] += "\n\n" + plan_to_text(plan)
             result = self._run_loop(start_step=1)
-            self._maybe_distill(result)  # M5-B3：终态沉淀记忆
+            self._maybe_distill(result)  # 终态沉淀记忆
             return result
         finally:
             self._close_mcp()
 
     def resume(self, approve_budget: bool = False) -> dict:
-        """从最后 checkpoint 续跑（MVP 底线 2/3/4 交汇点）。
+        """从最后一个 checkpoint 恢复执行。
 
-        - 底线2：不重放已完成动作（done_actions 直接载入）
-        - 底线3：checkpoint 的 ws_hash 与当前工作区不一致（漂移）→ 拒绝续跑
-        - 底线4：run 处于 budget_paused（预算超限）→ 必须人工批准才续跑
+        - 直接载入 done_actions，不重放已完成动作
+        - checkpoint 的 ws_hash 与当前工作区不一致时拒绝恢复
+        - budget_paused 状态需要明确批准或提高有限预算
         """
         run = db.get_run(self.run_id)
         if run is None:
@@ -295,7 +277,7 @@ class HarnessLoop:
         if not recovery["can_auto_resume"]:
             db.set_error(self.run_id, "action_unknown", recovery["reason"], "interrupted")
             raise LoopError(recovery["reason"])
-        # 预算暂停门（底线4）：超限暂停的 run 未获批准不得续跑
+        # 超限暂停的运行未获批准时不得恢复。
         if run["status"] == "budget_paused":
             if approve_budget:
                 from .usage import extend_budget
@@ -311,9 +293,9 @@ class HarnessLoop:
         cp = db.last_checkpoint(self.run_id)
         if cp is None:
             return self.run()
-        self._setup_mcp()  # M5-B2：resume 续跑同样需要 MCP 工具（幂等）
+        self._setup_mcp()  # 恢复时重新建立 MCP 工具表
         try:
-            # 漂移识别（底线3）：工作区被外部改动（git restore/手动编辑）→ 续跑上下文已过期
+            # 工作区被外部修改后，已保存的执行上下文不再可信。
             cur_hash = _ws_hash(self.workspace)
             saved_hash = cp["ws_hash"] or ""
             if saved_hash and cur_hash != saved_hash:
@@ -334,7 +316,7 @@ class HarnessLoop:
                 self.messages = []
             if not self.messages:
                 self.messages = self._initial_messages(run["goal"] or self.goal, fresh=False)
-            # 预算计量恢复：checkpoint 记录的历史 token 回填 meter（护栏跨 resume 生效）
+            # 将 checkpoint 中的累计 token 回填 meter，使预算跨恢复生效。
             if isinstance(self.meter, dict):
                 self.meter["tokens"] = int(cp["tokens_used"] or 0)
                 if "total_tokens" in self.meter:
@@ -343,7 +325,7 @@ class HarnessLoop:
             self._rebuild_verification_state()
             log_event("run_resumed", run_id=self.run_id, step=cp["step"])
             result = self._run_loop(start_step=start)
-            self._maybe_distill(result)  # M5-B3：resume 到终态同样沉淀
+            self._maybe_distill(result)  # 恢复后进入终态也沉淀记忆
             return result
         finally:
             self._close_mcp()
@@ -369,8 +351,7 @@ class HarnessLoop:
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
     def _system_prompt(self) -> str:
-        """system prompt：use_mcp 时动态重算（MCP 工具运行期才注册，静态常量不含）；
-        use_github 时追加交付流程指引（普通修复 run 不含，基线口径不动）。"""
+        """按当前工具表构造 system prompt，并按运行选项附加交付流程。"""
         base = (
             _SYSTEM_HEAD
             + "\n可用工具（当前运行注册表）:\n"
@@ -380,7 +361,7 @@ class HarnessLoop:
             base = base + "\n" + GITHUB_SYSTEM_EXTRA
         return base
 
-    # ---------- MCP 接入（M5-B2） ----------
+    # ---------- MCP 接入 ----------
     def _setup_mcp(self) -> None:
         """启动 MCP server(s) 并注册其工具（幂等；重复调用不重复 spawn）。
 
@@ -424,13 +405,12 @@ class HarnessLoop:
                 pass
         self._mcp_clients = []
 
-    # ---------- 规划阶段（M4 planner，P1/P3/P4） ----------
+    # ---------- 规划阶段 ----------
     def _plan_once(self) -> AgentPlan | None:
-        """plan phase：调一次 planner（与执行共用同一 decider 通道，token 计量天然一致）。
+        """调用一次 planner；规划和执行共用 decider 与 token 计量。
 
-        - 消息 = PLAN_PROMPT(system) + 任务目标(user)——与执行消息区分开，互不污染
-        - 坏 plan JSON 重试 ≤PLAN_RETRY（P2）；仍失败 → 记 plans 行 failed 后降级返回
-          None（advisory 语义：规划是前置 0 成本增强，失败不能拖垮执行）
+        规划消息与执行消息相互隔离。无效 JSON 只做有限重试；耗尽后记录失败并
+        返回 None，执行循环仍可继续。
         - planning tokens = meter 前后差值（decider 包装层负责累加，loop 只读两次）
         - 产出即 save_plan：进程杀在 plan phase → resume 不重规划、不重付 token
         """
@@ -461,9 +441,8 @@ class HarnessLoop:
 
     def _run_loop(self, start_step: int) -> dict:
         # 步数是"段"语义而非整 run 绝对上限：每段（run()/每次 resume()）最多
-        # MAX_STEPS 步。真实库任务（T4）探索开销大，一段跑不完 → paused 后可
-        # resume 续跑新的一段（T4 run12 实证：30 步触顶时已摸到 pipe 格式定义，
-        # 旧绝对语义下 resume 立即再 paused，一步都续不了）。
+        # MAX_STEPS 是单个执行段的上限；恢复会开启新的有限执行段，而不是立即
+        # 因累计步数再次暂停。
         segment_end = start_step + MAX_STEPS - 1
         step = start_step - 1
         self._repair_segment_start = len(self.done_actions)
@@ -473,7 +452,7 @@ class HarnessLoop:
                     self._checkpoint(step)
                     db.set_error(self.run_id, "usage_unknown", "模型请求用量未知，需核查后续跑", "paused")
                     return self._summary("paused", steps=step, reason="usage_unknown")
-                # 预算护栏（底线4）：meter 累计超限 → 暂停等人工批准（记审批请求）
+                # 累计用量超限时暂停，并记录审批请求。
                 if self._over_budget():
                     approval.request_budget_continue(self.run_id, self._used_tokens(), self.token_budget)
                     self._checkpoint(step)
@@ -505,7 +484,7 @@ class HarnessLoop:
                     # 顺序翻页拦截：同文件连续翻页无进展 → 引导 search_file（软墙）
                     self.messages.append({"role": "user", "content": pwalk})
                     continue
-                # HIGH 工具审批（M2）：模型请求高危工具 → 拒绝 + 审计记录，喂回提示继续
+                # HIGH 工具在执行前拒绝并记录审计结果。
                 spec = self.registry.get(act.tool_name) if act.tool_name else None
                 if spec is not None and spec.perm >= Perm.HIGH:
                     deny = approval.deny_high_tool(self.run_id, act.tool_name or "")
@@ -513,7 +492,7 @@ class HarnessLoop:
                     continue
                 self._execute(act, step)
                 repair_pause = self._repair_failure_guard()
-                self._stall_radar()  # O4：连续零进展动作 → trace/日志（可选提醒）
+                self._stall_radar()  # 连续零进展动作写入 trace/日志，可选主动提醒
                 self._checkpoint(step)
                 if repair_pause:
                     db.set_error(self.run_id, "repair_stalled", repair_pause, "paused")
@@ -527,14 +506,14 @@ class HarnessLoop:
             db.update_run_status(self.run_id, "failed")
             raise
 
-    # ---------- 决策（带 Q11 重试） ----------
+    # ---------- 决策与有限重试 ----------
     def _decide_once(self, step: int) -> AgentStep:
         example = (
             '{"thought": "读文件看现状", "tool": "read_file", "args": {"path": "utils.py"}, "done": false}'
         )
         for attempt in range(LLM_RETRY + 1):
             try:
-                # M3：开压缩时给 decider 的是"近 N 步全文 + 旧步摘要"视图（消息本体仍全量）
+                # 压缩只改变 decider 视图；持久化消息仍保留全量内容。
                 if self.context_compress:
                     latest_test = next(
                         (action for action in reversed(self.done_actions) if action["tool"] == "run_tests"),
@@ -554,7 +533,7 @@ class HarnessLoop:
             except StepParseError as e:
                 if attempt >= LLM_RETRY:
                     raise
-                # 把错误喂回模型要求重出，并附合法格式示例（Q11：解析失败重试 ≤LLM_RETRY）
+                # 将解析错误和合法示例反馈给模型，最多重试 LLM_RETRY 次。
                 # 若错误疑似 JSON 语法（Expecting...），附转义规则教学——长 content 里
                 # 含代码引号/docstring 是免费模型的常见翻车点，光说"格式错"教不会
                 esc_hint = ""
@@ -574,15 +553,14 @@ class HarnessLoop:
                 )
         raise StepParseError("unreachable")  # pragma: no cover
 
-    # ---------- 预算计量（M2） ----------
+    # ---------- 预算计量 ----------
     def _used_tokens(self) -> int:
         return int((self.meter or {}).get("tokens", 0))
 
     def _over_budget(self) -> bool:
         """meter 累计 >= 预算即超限（无 meter 或无预算 → 不启用护栏）。
 
-        人工批准续跑后（_budget_approved）本轮不再拦截——预算的语义是"暂停等人批准"，
-        不是"到点就永久失败"。
+        显式提高有限预算后，当前执行段不再被旧上限拦截。
         """
         if not self.token_budget or self.meter is None:
             return False
@@ -592,8 +570,7 @@ class HarnessLoop:
     def _verify_before_done(self) -> str:
         """模型宣称 done 前校验：改过代码就必须有"写之后的全绿测试"。
 
-        返回空串 = 允许收尾；否则返回要喂回模型的拦截消息。
-        防"写完就飘"（免费模型常见病：改完代码不 run_tests 就宣布完成）。
+        返回空串表示允许收尾；否则返回需要反馈给模型的拦截消息。
         """
         verified_green_after_write = self._last_green_test_step > self._last_write_step
         if not verified_green_after_write:
@@ -610,8 +587,7 @@ class HarnessLoop:
     def _dup_action_block(self, act: AgentStep) -> str:
         """重复写动作拦截：写类工具提交与上一步完全相同的 (tool, args) 时拒绝执行。
 
-        免费模型常见病：上一步 edit/write 已成功，模型没吸收结果又原样提交一次
-        （如 edit_file 成功后再次提交同一 old——此时 old 已被替换，必然失败）。
+        上一步 edit/write 成功后，相同参数再次执行不会产生有效进展。
         返回空串 = 放行；否则返回喂回模型的拦截消息。
         """
         tool_name = act.tool_name
@@ -621,9 +597,7 @@ class HarnessLoop:
         if not prev or prev.get("args") is None:
             return ""  # resume 场景 args 不可比时宁漏勿误
         if tool_name == "read_file" and prev["tool"] == "read_file":
-            # 连续两次读同一文件同一区间 = 模型在空转（拿不到新信息还反复读）。
-            # 免费模型大文件死循环实证：T4 真实库 test_regression.py 600 行超截断上限，
-            # 模型 14 步重复 read_file 同一文件直到预算暂停。这里第一步就拦，引导转向。
+            # 连续读取同一文件同一区间不会获得新信息，立即引导到其他动作。
             p1 = prev["args"].get("path")
             p2 = (act.args or {}).get("path")
             o1, o2 = prev["args"].get("offset"), (act.args or {}).get("offset")
@@ -639,9 +613,7 @@ class HarnessLoop:
             and prev["tool"] == "search_file"
             and (act.args or {}) == (prev["args"] or {})
         ):
-            # 同参数 search 连发 = 空转（T4 run14 实证：step15-30 连发 16 次
-            # search_file {} 空 pattern，registry 每次只回引导文本，模型无视继续空搜）。
-            # 第一步就拦，逼模型换具体 pattern 或转其他动作。
+            # 相同搜索参数不会获得新结果，要求提供具体关键词或切换动作。
             return (
                 f"你已连续两次 search_file 完全相同参数（{prev['args']}），不会拿到新结果。"
                 "请换具体 pattern（函数名/变量名/报错关键词），或 read_file 精读"
@@ -662,10 +634,8 @@ class HarnessLoop:
     def _page_walk_block(self, act: AgentStep) -> str:
         """顺序翻页护栏：read_file 带 limit 时，若区间接续上页末尾逐页前进则计数。
 
-        同文件连续顺序翻到第 PAGE_WALK_LIMIT 页（默认 3）仍只读不写不测 → 拦一次，
-        提示用 search_file 定位（T4 run7 实证：模型无视提醒从头逐页通读 600 行
-        test 文件 4 页 → 上下文臃肿 → JSON 崩坏整局）。软墙非死墙：拦截后该路径
-        计数清零，真想通读全文的模型可以继续翻，只是每满 3 页会被提醒一次。
+        同文件连续顺序翻到第 PAGE_WALK_LIMIT 页（默认 3）仍只读不写不测时拦截，
+        提示用 search_file 定位。拦截后该路径计数清零，确有需要时仍可继续翻页。
         返回空串 = 放行；否则返回喂回模型的拦截消息。
         """
         if act.done or act.tool_name != "read_file":
@@ -746,10 +716,7 @@ class HarnessLoop:
             action_id = db.begin_action(self.run_id, step, tool, args)
             result = self.registry.execute(tool, self.workspace, args)
         except ToolError as e:
-            # 工具级可恢复错误（edit old 不匹配/文件不存在/old 不唯一/路径越界/MCP
-            # 失败等）：转 ok=False 结果喂回模型纠正重试，不崩 run——T4 run15 实证：
-            # 模型凭记忆 edit 抄错 old 一次 → 崩 LoopError → 整局 failed，21 步侦察
-            # 全白费。模型看到"[工具错误] 文件里找不到..."会先 read_file 再改。
+            # 可恢复的工具错误转成 ok=False 反馈，让模型修正参数而不终止整个运行。
             result = ToolResult(f"[工具错误] {e}", ok=False)
         output = result.output
         # 强制验证状态：记录最后一次写文件 / 最后一次全绿测试的步号
@@ -771,9 +738,7 @@ class HarnessLoop:
         self.messages.append(
             {"role": "user", "content": f"[工具结果 {tool}] {_truncate(output, READ_FILE_CAP)}"}
         )
-        # 注意：消息层上限 = READ_FILE_CAP(6000)，与 registry read_file/search_file 输出上限一致，
-        # 不能更小——否则工具自限后的输出被消息层二次截断（T4 run8 实证：600 行 test 文件
-        # 页读 3682 字符被 2000 砍半，第 596 行的目标测试永远看不到，模型只能反复换读法）
+        # 消息层上限必须与读取工具一致，避免已按完整行限长的源码被二次截断。
         self.done_actions.append(
             {
                 "step": step,
@@ -789,15 +754,12 @@ class HarnessLoop:
         self._prev_action = {"tool": tool, "args": args} if result.ok else None
         return {"tool": tool, "output": output}
 
-    # ---------- O4 空转雷达 ----------
+    # ---------- 空转检测 ----------
     def _stall_radar(self) -> None:
         """连续 STALL_LIMIT 个动作全是零进展（无 edit/write/test）→ 判空转。
 
-        纯观测（默认）：只记 trace（verdict=stall）+ 打日志，不改执行流、不碰 messages
-        ——数字①/②/③ 口径零影响。stall_warning=True 时把提醒注入上下文拉模型回正轨。
-        周期性提醒：_stall_warned_at 记录上次提醒/复位的动作位置，零进展再满
-        STALL_LIMIT 步就再次提醒——长空转（search 轰炸/空 search）需要多次提醒
-        拉回（T4 run12/14 实证 14 步空转只提醒一次无效）；出现进展动作即复位。
+        默认只记录 trace（verdict=stall）和日志，不改变执行流。stall_warning=True
+        时将提醒注入上下文。持续空转会周期性提醒，出现进展动作后重新计数。
         """
         n = len(self.done_actions)
         if n < STALL_LIMIT:

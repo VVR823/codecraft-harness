@@ -1,4 +1,4 @@
-"""Day1 冒烟：沙箱 v0 演示。
+"""沙箱执行器冒烟演示。
 
 用法（backend/ 目录下）：
     python scripts/demo_sandbox.py
@@ -34,9 +34,9 @@ def main() -> None:
     print(f"=> 进程树被杀干净且未等满 30s: {'PASS' if ok else 'FAIL'}")
 
     if r["exit_code"] == 1 and "1 failed, 1 passed" in r["stdout"] and ok:
-        print("\nDay1 沙箱冒烟：PASS")
+        print("\n沙箱冒烟：PASS")
     else:
-        print("\nDay1 沙箱冒烟：FAIL（见上方输出）")
+        print("\n沙箱冒烟：FAIL（见上方输出）")
 
 
 if __name__ == "__main__":

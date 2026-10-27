@@ -1,4 +1,4 @@
-"""Regressions discovered by the 2026-10-22 independent boundary audit."""
+"""Regression tests for trust boundaries and audit behavior."""
 
 import json
 

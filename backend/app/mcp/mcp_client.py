@@ -1,4 +1,4 @@
-"""MCP 最小客户端（M5-B2，自研 stdio transport，不引官方 SDK）。
+"""MCP stdio 客户端，实现项目所需的最小协议子集。
 
 MCP = Model Context Protocol，四层概念：协议层（JSON-RPC 2.0）/ transport 层
 （stdio / SSE / HTTP）/ client / server。这里实现协议子集 + stdio transport：
@@ -7,11 +7,10 @@ MCP = Model Context Protocol，四层概念：协议层（JSON-RPC 2.0）/ trans
 - 能力发现: tools/list → 返回 [{name, description, inputSchema}]
 - 工具调用: tools/call {name, arguments} → {content:[{type:text, text}]}
 
-帧格式：stdio使用newline-delimited JSON，每行一条JSON-RPC消息；2024-11-05
-规范已经如此规定。本项目早期Content-Length试验是实现修正，不是协议版本迁移。
+帧格式：stdio 使用 newline-delimited JSON，每行一条 JSON-RPC 消息。
 仅实现initialize、通知、tools/list和文本tools/call子集，不宣称完整MCP兼容。
 
-设计（延续自研浓度叙事）：
+设计约束：
 - 进程生命周期：spawn server 子进程（python -m app.mcp.demo_server 或官方
   server），父进程退出自动 terminate（Popen + finally），不留孤儿
 - 无第三方依赖：json / subprocess / threading 即可
@@ -29,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-# stdio 帧：newline-delimited JSON（MCP 2025-03-26+ 规范）
+# stdio 帧使用 newline-delimited JSON
 def _encode(msg: dict) -> bytes:
     return json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
 
@@ -130,10 +129,7 @@ class MCPClient:
                 self.proc.stdin.flush()
                 while True:
                     resp = self._read_response()
-                    # 跳过 server 主动推送的通知帧（JSON-RPC 无 id，如
-                    # notifications/tools/list_changed）——直到读到本请求的响应
-                    # （2026-09-09 官方 server 对接实证：everything 握手后会推
-                    # list_changed，旧实现把它当响应读 → tools/list 得空）
+                    # 跳过没有 id 的服务端通知，直到读到当前请求的响应。
                     if resp.get("id") == self._req_id:
                         break
         except (BrokenPipeError, OSError) as e:

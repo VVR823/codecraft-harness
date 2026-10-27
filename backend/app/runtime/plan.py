@@ -1,19 +1,15 @@
-"""Planner（M4 B1~B2）：任务规划器——advisory plan + agentic execution。
-
-背景：v2.2 §4 承诺了 runtime/plan.py（任务拆 DAG…），但 M0~M3 没落地，README
-架构树也悄悄删了这行——JD 关键词"任务规划器"接不上。M4 补上，设计定稿（选项 A，
-控制在一个"不加戏"的度）：
+"""咨询式任务规划器：advisory plan + agentic execution。
 
 - 两段式：plan phase（一次规划调用）+ execute phase（现有 agentic loop 原样复用）。
 - 计划是**咨询性脚手架，不是硬状态机**——执行仍让 LLM 每步自选工具；发现计划与
   文件实际不符时可偏离（保住已打通的 self-repair 闭环，不引 LangGraph）。
 - 计划注入初始 user 消息（goal 之后）→ 随 checkpoint 自动持久化 → resume 不重规划、
   不重付规划 token（与"压缩不损可恢复性"同理）。
-- 计划单独落 plans 表（审计/回放口径）；planning tokens 由 loop 按 meter 前后差值
+- 计划单独落 plans 表用于审计和回放；planning tokens 由 loop 按 meter 前后差值
   记录，计入预算护栏（护栏不被规划调用绕过）。
 
-P2 解析策略与 Q11 同构：Pydantic 强校验 + 重试 ≤PLAN_RETRY，仍失败 → 降级无计划
-执行（advisory 语义：规划失败不能拖垮执行）。
+解析采用 Pydantic 强校验并限制重试次数；仍失败时降级为无计划执行，避免规划故障
+拖垮主执行流程。
 """
 
 from __future__ import annotations
@@ -24,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .protocol import StepParseError, extract_json_object
 
-# 坏 plan JSON 最多重试次数（P2；比执行决策少——规划是前置 0 成本调用，不值得反复烧）
+# 规划是辅助环节，失败后的重试次数应低于核心执行决策。
 PLAN_RETRY = 2
 
 

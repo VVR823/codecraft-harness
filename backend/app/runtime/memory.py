@@ -1,9 +1,9 @@
-"""长期记忆（M5-B3）：跨 run 经验沉淀与复用。
+"""跨运行的经验沉淀与复用。
 
-定位（诚实口径，面试可讲）：
-- 短期记忆 = 会话内上下文 + checkpoint（M0/M2，断点续跑不丢状态）
+定位：
+- 短期记忆 = 会话内上下文 + checkpoint，支持断点续跑
 - 长期记忆 = **跨 run 行为记忆**：同一任务包第二次跑时，注入上次
-  "成功路径 / 失败教训"，让 agent 不重踩坑、少走弯路（经验复用，不是知识库/RAG）
+  "成功路径 / 失败教训"，减少重复失败和无效探索（经验复用，不是知识库/RAG）
 
 两个动作：
 1. `distill(run_id, task_id, actions, status, reason)` — run 结束时调用。
@@ -13,7 +13,7 @@
 2. `render_for_goal(task_id)` — run 开始时调用。检索该任务历史记忆，
    渲染成注入 user 消息的段落（放 goal 之后）。
 
-只入不出会无限膨胀，防膨胀落在两端（面试可指代码）：
+为避免无限膨胀，写入端和读取端分别限制存量与注入量：
 - 写入端（db.save_memory）：同 kind 去重——先 INSERT 再删同 task 同 kind
   旧记录（同任务同 kind 只保留最新，旧的下沉）；每任务总量封顶
   MAX_MEMORIES_PER_TASK（超出删最旧）。distill 每次沉淀都走这条路。
@@ -50,8 +50,8 @@ def _summarize_writes(actions: list[dict]) -> str:
 def distill(run_id: str, task_id: str, actions: list[dict], status: str, reason: str = "") -> str | None:
     """run 结束后沉淀一条记忆；返回沉淀内容（无则 None）。
 
-    - status == done → success_path：这次怎么改到全绿的（防下次绕路）
-    - 其它（failed/paused/budget_paused）→ failure_lesson：为什么没成（防重踩坑）
+    - status == done → success_path：记录达到全绿状态的关键改动
+    - 其它（failed/paused/budget_paused）→ failure_lesson：记录未完成原因
     """
     if status == "done":
         writes = _summarize_writes(actions)
@@ -72,7 +72,7 @@ def distill(run_id: str, task_id: str, actions: list[dict], status: str, reason:
 def render_for_goal(task_id: str, limit: int = 3) -> str:
     """按任务检索历史记忆，渲染成注入段落（run 开始时拼进 user 消息）。
 
-    无记忆返回空串（→ 注入层直接跳过，默认关口径零影响）。
+    无记忆时返回空串，由注入层直接跳过。
     """
     mems = db.get_memories_for_task(task_id, limit=limit)
     if not mems:

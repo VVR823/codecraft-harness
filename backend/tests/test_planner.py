@@ -1,4 +1,4 @@
-"""M4 planner 测试（B1 骨架 + B2 韧性）：
+"""任务规划器的结构、持久化与降级行为测试。
 ① plan phase 先于 execute：规划只调一次、计划注入执行上下文、执行剧本照跑
 ② 坏 plan JSON → 重试 ≤PLAN_RETRY → 成功；重试耗尽 → 降级无计划执行（不崩）
 ③ resume 不重规划：plans 表仅 1 行（正常 resume / 杀在 plan phase 两个场景）
@@ -47,7 +47,7 @@ class PlannerFake:
     """区分规划/执行调用的 Fake decider。
 
     - 规划调用（system == PLAN_PROMPT）：从 plan_outputs 弹一段文本返回
-    - 执行调用：从 script 弹 JSON 决策；剧本用尽 → done（防跑飞）
+    - 执行调用：从 script 弹出 JSON 决策；序列耗尽后返回 done
     meter_plan_add / meter_exec_add：每次对应调用把 meter["tokens"] 加上该值
     （模拟 LLM 真实消耗，预算用例用；None=不动 meter）。
     """
@@ -127,7 +127,7 @@ def test_plan_runs_once_before_execute(ws):
 
 
 def test_plan_off_by_default_keeps_old_behavior(ws):
-    """use_plan 默认 False：不开规划，跟 M3 及以前行为一致（回归保护）。"""
+    """use_plan 默认关闭，保持基础执行路径不变。"""
     rid = "m4p0_" + uuid.uuid4().hex[:8]
     fake = PlannerFake(plan_outputs=[GOOD_PLAN], script=['{"thought": "收尾", "done": true}'])
     r = HarnessLoop(ws, "修好 utils.py", fake, run_id=rid).run()

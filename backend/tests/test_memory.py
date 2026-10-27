@@ -1,4 +1,4 @@
-"""M5-B3 长期记忆单测：沉淀（成功路径/失败教训）/ 检索 / run 注入 / 默认关口径。"""
+"""长期记忆的沉淀、检索、运行时注入与关闭路径测试。"""
 
 import sys
 import uuid
@@ -117,7 +117,7 @@ def _mk_loop(ws, task_id: str, use_memory: bool) -> HarnessLoop:
 
 
 def test_loop_initial_message_injects_memory_when_enabled(tmp_path, task_id):
-    """use_memory=True 且有历史记忆 → 初始 user 消息注入；False → 不注入（口径）。"""
+    """有既有记忆且功能开启时才向初始 user 消息注入。"""
     # 先造一条该任务的历史记忆
     db.save_memory(task_id, "past_run", "failure_lesson", "上次栽在没初始化 x")
     ws = _ws(tmp_path)

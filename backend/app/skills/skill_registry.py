@@ -1,4 +1,4 @@
-"""Skill 注册体系（M5-B1，自研 SKILL.md 协议，参照 Anthropic Skills 目录标准）。
+"""基于 SKILL.md 目录约定的轻量 Skill 注册体系。
 
 一个 skill = 一个目录，内含 SKILL.md：
 ```markdown
@@ -19,7 +19,7 @@ description: <一句话：何时用、解决什么问题>（用于语义匹配�
   手写极简解析（`---\nkey: value\n---` 块），值不逃逸即可。
 - 匹配是"弱语义"：description 里的词在 goal 里出现（或 goal 词在 description 里出现）
   即候选——不给 LLM 排序，全量注入让 Agent 自己挑。注入与否由 loop 的 use_skills
-  开关决定（默认关 → 数字① 口径不动）。
+  开关决定；关闭时不改变基础执行路径。
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def discover_skills(skills_root: str | Path) -> list[Skill]:
 def match_skills(skills_root: str | Path | None, goal: str, top_k: int = 3) -> list[Skill]:
     """按任务 goal 语义匹配 skills（弱匹配：双向关键词命中）。
 
-    - skills_root 为 None / 目录不存在 / 无 skills → 返回空（默认关口径零影响）
+    - skills_root 为 None、目录不存在或没有 skill 时返回空列表
     - 匹配：把 description 与 goal 各自切成词，任一方向命中即候选；
       按命中词数排序取 top_k。命中词数相同保持发现顺序（稳定）。
     """

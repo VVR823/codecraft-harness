@@ -1,7 +1,7 @@
-"""轻量沙箱执行器 v0（Q8）。
+"""轻量沙箱执行器。
 
 设计：
-- 把任务包【复制】进临时目录再执行 —— 源目录只读，AI 怎么折腾都不污染原任务包（可复现靠 git，重置靠 git checkout）。
+- 把任务包复制进临时目录再执行，避免受测进程污染原任务包。
 - 强制子进程输出 utf-8（PYTHONIOENCODING / PYTHONUTF8），避免 Windows GBK 乱码撕烂解析器。
 - 超时则杀整个进程树（Windows taskkill /T /F；POSIX 杀进程组），不留孤儿进程。
 
@@ -35,7 +35,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            errors="replace",  # taskkill 输出按 GBK/utf-8 混排也不炸线程
+            errors="replace",  # 兼容 taskkill 输出中的混合编码。
             timeout=10,
         )
     else:
@@ -79,7 +79,7 @@ def run_in_sandbox(
             "LC_ALL",
         }
         env = {k: v for k, v in os.environ.items() if k.upper() in allowed}
-        env["PYTHONIOENCODING"] = "utf-8"  # Q8: 强制子进程输出 utf-8
+        env["PYTHONIOENCODING"] = "utf-8"  # 强制子进程输出 utf-8
         env["PYTHONUTF8"] = "1"
         env.pop("PYTHONPATH", None)  # 隔离：不让子进程看到宿主 app 包
 
@@ -119,7 +119,7 @@ def run_in_sandbox(
                 proc.wait(timeout=timeout)
                 timed_out = False
             except subprocess.TimeoutExpired:
-                _kill_tree(proc)  # Q8: 超时进程树强杀
+                _kill_tree(proc)  # 超时后终止整个进程树
                 proc.wait(timeout=10)
                 timed_out = True
             for reader in readers:

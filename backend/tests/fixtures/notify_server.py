@@ -1,4 +1,4 @@
-"""MCP 通知帧测试 server（2026-09-09 W14 新增）。
+"""用于验证 MCP 通知帧处理的测试服务。
 
 模拟真实第三方 server（官方 everything）的行为：握手后**主动推送**
 notifications/tools/list_changed——旧版 client 把它当请求响应读 → 拿空。

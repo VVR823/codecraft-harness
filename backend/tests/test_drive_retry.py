@@ -40,9 +40,8 @@ def test_cli_returns_after_one_attempt(monkeypatch, tmp_path, status, expected):
 def test_max_steps_is_per_segment(monkeypatch, tmp_path):
     """段语义：run() 一段触顶 paused 后，resume() 获得全新配额继续跑。
 
-    T4 run12 实证（旧绝对语义 bug）：run 在 30 步 paused 后 resume，step 从 30 起算，
-    `while step < 30` 立即退出 → 一步都续不了。改段语义后每段（run/每次 resume）
-    最多 MAX_STEPS 步。
+    步数上限按执行段计算。恢复执行时累计步数继续增长，但新执行段仍获得完整的
+    MAX_STEPS 配额。
     """
     import app.runtime.loop as loop_mod
     from app.runtime.loop import HarnessLoop

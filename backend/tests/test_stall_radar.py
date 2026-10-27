@@ -1,4 +1,4 @@
-"""O4 空转雷达测试（2026-09-05）。
+"""空转检测与恢复护栏测试。
 
 直接驱动 _stall_radar 方法（不跑真 LLM）：连续 STALL_LIMIT 个零进展动作 → 触发；
 有进展动作（edit_file/run_tests）→ 不触发；同一段空转只提醒一次；stall_warning=True
@@ -117,7 +117,7 @@ def test_warning_not_injected_by_default(tmp_path):
     assert len(_stall_traces(loop)) == 1  # trace 仍记录（观测不缺席）
 
 
-# ---------- read_file 重复拦截（T4 大文件死循环实证补的防复发） ----------
+# ---------- read_file 重复拦截 ----------
 
 
 def test_dup_read_same_range_blocked(tmp_path):
@@ -163,7 +163,7 @@ def test_dup_read_diff_file_allowed(tmp_path):
     assert loop._dup_action_block(act) == ""
 
 
-# ---------- read_file 分页（T4 第二次失败补的边界处理） ----------
+# ---------- read_file 分页 ----------
 
 
 def test_read_file_pagination_bounds(tmp_path):
@@ -189,7 +189,7 @@ def test_read_file_pagination_bounds(tmp_path):
     assert r.ok and "[行" not in r.output
 
 
-# ---------- search_file（T4 第四次失败补：真实库定位必须有搜索） ----------
+# ---------- search_file ----------
 
 
 def test_search_file_locates_definitions(tmp_path):
@@ -235,7 +235,7 @@ def test_missing_file_suggests_matching_repository_path(tmp_path):
     assert "backend\\app\\runtime\\loop.py" in result.output or "backend/app/runtime/loop.py" in result.output
 
 
-# ---------- 顺序翻页护栏（T4 run7 实证补：逐页通读大文件 → 上下文臃肿 → JSON 崩坏） ----------
+# ---------- 顺序翻页护栏 ----------
 
 
 def _read_act(path: str, offset: int, limit: int = 100):
@@ -295,21 +295,17 @@ def test_page_walk_full_read_and_other_tools_ignored(tmp_path):
     assert loop._page_walk_block(done) == ""
 
 
-# ---------- 工具结果消息不二次截断（T4 run8 实证：2000 字符消息层砍掉页尾目标测试） ----------
-
-
-# ---------- 工具结果消息不二次截断（T4 run8 实证：2000 字符消息层砍掉页尾目标测试） ----------
+# ---------- 工具结果消息不二次截断 ----------
 
 
 def test_read_result_message_not_double_truncated(tmp_path):
     """消息层截断上限 = registry 输出上限：工具给了多少内容，模型就能看到多少。
 
-    T4 run8 实证：页读 500-599 行输出 3682 字符（含第 596 行的目标测试），消息层
-    2000 字符二次截断把它砍半——目标测试永远看不到，模型只能反复换读法空转 15 步。
+    分页读取结果已经由工具控制大小；消息层再次截断会丢失页尾内容，并诱发重复读取。
     """
     from app.runtime.protocol import AgentStep
 
-    # ~4200 字符文件：超过旧 2000 上限、低于 registry 6000 上限 → 工具全量给出
+    # 约 4200 字符：超过消息层较小上限，但低于工具自身 6000 字符上限。
     body = "\n".join(f"line{i:04d} " + "x" * 40 for i in range(1, 90))
     (tmp_path / "medium.py").write_text(body, encoding="utf-8")
     loop = _mk_loop(tmp_path)
@@ -320,10 +316,7 @@ def test_read_result_message_not_double_truncated(tmp_path):
     assert "截断" not in msg  # 消息层没有二次截断标记
 
 
-# ---------- 分页自动收缩（T4 run10 实证：页尾拦腰截断 → 模型折返重读/乱序跳读） ----------
-
-
-# ---------- 分页自动收缩（T4 run10 实证：页尾拦腰截断 → 模型折返重读/乱序跳读） ----------
+# ---------- 分页自动收缩 ----------
 
 
 def test_page_read_auto_shrinks_long_pages(tmp_path):
@@ -361,18 +354,14 @@ def test_page_read_small_pages_unchanged(tmp_path):
     assert r.ok and "已到文件末尾" in r.output and "共 600 行" in r.output
 
 
-# ---------- search_file 协议白名单（T4 run7~10 真根因：registry 注册了但协议枚举漏加） ----------
-
-
-# ---------- search_file 协议白名单（T4 run7~10 真根因：registry 注册了但协议枚举漏加） ----------
+# ---------- search_file 协议白名单 ----------
 
 
 def test_protocol_allows_search_file():
     """AgentStep 校验放行 search_file——registry 有 handler、prompt 在教，协议必须开门。
 
-    T4 run7~10 四连实证：search_file 自 2026-09-06 注册进 registry + system prompt
-    教了用法 + 截断提示/翻页护栏都在喊'用 search_file'，但 protocol.Tool 枚举漏加
-    → 模型每次调 search_file 都被'未知工具'打回，被迫退回逐页 read_file 通读大文件。
+    registry、system prompt 与协议白名单必须同步；否则模型会看到工具说明，却在
+    调用时被协议层拒绝，只能退回逐页读取大文件。
     """
     from app.runtime.protocol import AgentStep
 
@@ -397,7 +386,7 @@ def test_protocol_parse_step_with_search_file():
     assert act.tool_name == "search_file" and act.args["pattern"] == "def _pipe"
 
 
-# ---------- 周期式空转提醒 + search_file 重复拦截（T4 run12/14 实证补，2026-09-07） ----------
+# ---------- 周期式空转提醒 + search_file 重复拦截 ----------
 
 
 def test_stall_repeats_periodically(tmp_path):
@@ -408,7 +397,7 @@ def test_stall_repeats_periodically(tmp_path):
     assert len(_stall_traces(loop)) == 1  # 第 3 个后首次提醒
     loop.done_actions = _reads(6)
     loop._stall_radar()
-    assert len(_stall_traces(loop)) == 2  # 再满 3 步 → 再次提醒（run14 14 步空搜场景）
+    assert len(_stall_traces(loop)) == 2  # 再满 3 步后再次提醒。
     loop.done_actions = _reads(8)
     loop._stall_radar()
     assert len(_stall_traces(loop)) == 2  # 8-6=2 < 3，还不到下次提醒
@@ -416,7 +405,7 @@ def test_stall_repeats_periodically(tmp_path):
 
 
 def test_dup_search_same_args_blocked(tmp_path):
-    """连续两次 search_file 完全同参数 → 拦截（run14 空 search {} 连发 16 步实证）。"""
+    """连续两次 search_file 使用完全相同的参数时应拦截。"""
     loop = _mk_loop(tmp_path)
     from app.runtime.protocol import AgentStep
 
@@ -436,15 +425,14 @@ def test_dup_search_diff_pattern_allowed(tmp_path):
     assert loop._dup_action_block(act) == ""
 
 
-# ---------- ToolError 喂回不崩 run（T4 run15 实证：edit old 抄错 → LoopError 整局 failed） ----------
+# ---------- ToolError 返回给模型而不终止运行 ----------
 
 
 def test_tool_error_feeds_back_not_crash(tmp_path):
     """edit_file old 不匹配（ToolError）→ ok=False 结果喂回，不崩 run。
 
-    run15（4e2f951657d0）实证：模型凭记忆 edit 抄错 old（pipe 定义 lineabove 抄成
-    None），ToolError 被 raise LoopError → 整局 failed，21 步侦察白费。工具级可
-    恢复错误应作为工具结果让模型看到原因后纠正（先 read_file 再复制准确原文）。
+    可恢复的工具错误应作为结果返回，让模型看到原因后纠正；不应升级为终止整个
+    执行循环的异常。
     """
     loop = _mk_loop(tmp_path)
     (tmp_path / "x.py").write_text("a = 1\n", encoding="utf-8")

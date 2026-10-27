@@ -1,12 +1,12 @@
-"""SQLite 存储层 v2（Q9 六字段 + ctx_messages 完整消息 + runs.goal）。
+"""SQLite 存储层。
 
 表：
 - runs:        一次任务运行总账（含 goal：resume 重建上下文需要）
 - checkpoints: 断点存档（run_id, step, done_actions, ctx_messages, ctx_summary, ws_hash, tokens_used）
 - traces:      行车记录仪（JSONL 同构事件，摘要）
 - usage:       成本记账
-- approvals:   审批记录（M2：超预算续跑 / HIGH 高危工具——"人工批准"证据落这里）
-- plans:       任务计划（M4 planner：run 级 1 行，审计/回放 + 防 resume 重规划）
+- approvals:   超预算续跑与高危工具的审批记录
+- plans:       每次运行的任务计划，供审计、回放和恢复使用
 """
 
 import json
@@ -174,7 +174,7 @@ def list_runs(limit: int = 30) -> list[sqlite3.Row]:
         return rows
 
 
-# ---------------- checkpoints（Q9 六字段 + ctx_messages） ----------------
+# ---------------- checkpoints ----------------
 def save_checkpoint(
     run_id: str,
     step: int,
@@ -209,7 +209,7 @@ def last_checkpoint(run_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
-# ---------------- traces（Q13） ----------------
+# ---------------- traces ----------------
 def append_trace(
     run_id: str,
     step: int,
@@ -247,7 +247,7 @@ def get_usage(run_id: str) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM usage WHERE run_id=?", (run_id,)).fetchone()
 
 
-# ---------------- approvals（M2：审批记录，底线 4 证据） ----------------
+# ---------------- approvals ----------------
 def append_approval(run_id: str, kind: str, action: str, note: str = "") -> None:
     """记一条审批事件：kind=budget_continue|high_tool；action=requested|approved|denied。"""
     with _lock, _conn() as conn:
@@ -271,7 +271,7 @@ def list_approvals(run_id: str) -> list[sqlite3.Row]:
         return conn.execute("SELECT * FROM approvals WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
 
 
-# ---------------- plans（M4 planner：计划存档，防 resume 重规划） ----------------
+# ---------------- plans（持久化后可避免 resume 重复规划） ----------------
 def save_plan(run_id: str, plan_json: str, planning_tokens: int = 0, status: str = "ok") -> None:
     """存一次规划结果（run 级 1 行）。plan_json 为空串 = 重试耗尽降级（status=failed）。
 
@@ -291,7 +291,7 @@ def get_plan(run_id: str) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM plans WHERE run_id=?", (run_id,)).fetchone()
 
 
-# ---------------- memories（M5-B3 长期记忆） ----------------
+# ---------------- memories ----------------
 
 
 def save_memory(
@@ -304,7 +304,7 @@ def save_memory(
 ) -> None:
     """跨 run 长期记忆：run 结束沉淀一条经验（成功后路径 / 失败教训）。
 
-    写入端防膨胀（与 memory.py docstring 对齐，面试可指代码）：
+    写入端通过去重和总量上限控制数据规模：
     - dedupe_kind=True：同 task 同 kind 只留最新一条——先 INSERT 再删同
       kind 旧记录（旧的下沉，防止每跑一次 done 就叠一条 success_path）
     - max_per_task=N：该 task 总条数封顶，超出删最旧（id 最小）

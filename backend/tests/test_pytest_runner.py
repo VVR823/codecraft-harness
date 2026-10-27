@@ -82,7 +82,7 @@ def test_format_for_llm_red():
     "task_name,exp_red,exp_green",
     [
         ("t1_single_fix", 1, 1),
-        ("t2_missing_fn", 4, 0),  # 全红：函数体被清空，所有用例炸
+        ("t2_missing_fn", 4, 0),  # 函数体被清空，所有用例失败。
         ("t3_cross_file", 3, 2),
     ],
 )
@@ -102,7 +102,7 @@ def test_run_pytest_on_real_tasks(task_name, exp_red, exp_green):
 
 
 def test_run_pytest_ok_after_fix_in_copy():
-    """在副本里修好 T1 再跑 → 全绿分支的格式。"""
+    """在副本中修复任务后返回全绿结果。"""
     import shutil
     import tempfile
 

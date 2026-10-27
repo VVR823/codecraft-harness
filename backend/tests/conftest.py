@@ -1,13 +1,9 @@
-"""全局测试隔离（2026-09-06）：单测绝不读写真实 data/harness.db。
+"""全局测试隔离：单测不读写真实 data/harness.db。
 
-背景：此前 test_m2/memory/planner/stall_radar 直接连真库，跑完在 memories/
-runs 等表留 mem_test_* / running 脏行——污染真实运行数据、memory 测试自身
-读到别的测试残留（顺序依赖 flaky）、clone 后真库历史混进测试。
-
-方案（autouse，每个测试生效）：
+隔离策略（autouse，每个测试生效）：
 - db.DB_PATH monkeypatch 到 tmp_path 独立库（同名 harness.db）+ init_db 建表
 - mcp_client_factory：spawn 指向 tmp 库的 demo server（--db-dir），mcp 测试
-  也零接触真库（且 clone 机器无 data/harness.db 也能跑）
+  同样使用隔离库，并支持在没有 data/harness.db 的环境运行
 
 注意：db.py 是 `from ..config import DB_PATH` 导入 → db.DB_PATH 是 db 模块
 自身属性，monkeypatch.setattr 有效；所有 db.* 函数运行时读模块属性。

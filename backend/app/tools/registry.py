@@ -1,11 +1,9 @@
-"""工具注册表 + 权限分级（Day5 / 执行计划 §4 tools/registry.py）。
+"""工具注册表、参数合同和权限分级。
 
 把 read_file / write_file / run_tests 从 loop 的 if/elif 搬进注册表统一管理：
-- 权限分级：LOW=只读/沙箱内可随便跑；MED=写工作区（git 可还原）；HIGH=工作区外/
-  装包等（需人工审批，M2 接 approval.py，现阶段直接拦截抛错）。
+- 权限分级：LOW=只读或沙箱内执行；MED=写工作区；HIGH=工作区外或不可逆操作。
 - loop 查表分发，handler 返回 ToolResult(output, ok)，不再散落 if/elif。
-- describe_tools() 生成"喂给 LLM 的工具说明书"，与运行时校验表永远同源，
-  避免 LLM 调出注册表里不存在的工具。
+- describe_tools() 从同一注册表生成模型工具说明，避免描述与运行时校验漂移。
 """
 
 from __future__ import annotations
@@ -27,15 +25,12 @@ PROTECTED_WRITE_GUIDANCE = (
     "先 read_file 读取实现文件，再 edit_file 修复实现，最后 run_tests 验证；不要再次修改测试。"
 )
 
-# GitHub 交付模式环境变量门闩：drive_task --github 时置 "1"，四个 git/gh 工具
-# 才放行执行（权限 MED 直接过 loop，不加审批层——门闩在 handler 内自检，避免给
-# 基线 run 的审批语义开洞）。不开 --github 时工具菜单可见但调用即得明确报错，
-# 引导模型回到代码修复动作，不影响 6/6 基线口径。
+# GitHub 工具除 MED 权限外还要求显式交付模式，避免普通修复任务产生远端副作用。
 GITHUB_ENV_FLAG = "HARNESS_GITHUB"
 _github_scope = ContextVar("codecraft_github", default=None)
 GIT_TIMEOUT_S = 90  # git/gh 子进程超时（网络推拉慢，比沙箱 120s 略紧）
 
-# 工具输出截断上限（防上下文爆炸 v0 防线，正式分层压缩在 M3 context.py）
+# 工具输出先做局部限长；跨步骤的上下文压缩由 runtime/context.py 处理。
 TOOL_OUTPUT_CAP = 3000
 READ_FILE_CAP = 6000
 
@@ -45,11 +40,11 @@ class Perm(IntEnum):
 
     LOW = 1  # 只读 / 沙箱内执行，无副作用
     MED = 2  # 写工作区文件（git 管理，可还原）
-    HIGH = 3  # 工作区外 / 装包等不可逆操作（需审批，M2 接线）
+    HIGH = 3  # 工作区外或不可逆操作，需要审批
 
 
 class ToolError(Exception):
-    """工具执行期错误（文件不存在、路径越界等），由 loop 转成整局失败原因。"""
+    """可恢复的工具执行错误，由 loop 转为失败结果反馈给决策器。"""
 
 
 class ToolOutcomeUnknown(Exception):
@@ -57,7 +52,7 @@ class ToolOutcomeUnknown(Exception):
 
 
 class NeedsApprovalError(ToolError):
-    """高危工具未获人工审批（M2 接 approval.py 后不再直接失败）。"""
+    """高危工具未获人工审批。"""
 
 
 @dataclass
@@ -164,8 +159,8 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
     lines = content.splitlines()
     total = len(lines)
 
-    # 分页读取：offset=起始行(1-based，默认 1)，limit=最多读多少行。
-    # 参数宽容处理：非法值 clamp 到合法范围（模型传错不整局崩，只提示）。
+    # 分页读取：offset 为 1-based 起始行，limit 为最大行数。
+    # 可纠正的参数错误返回工具结果，不让整个运行异常退出。
     offset = args.get("offset", 1)
     limit = args.get("limit", 0)
     try:
@@ -187,9 +182,7 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
     if limit > 0:
         req_end = min(offset + limit - 1, total)
         rows = lines[offset - 1 : req_end]
-        # 页面超长自动收缩：只返回"完整行"，绝不拦腰截断（T4 run10 实证：1500 行源码
-        # 每页 100 行 ≈6500 字符 > 6000 字符上限，旧实现把页尾 ~25 行砍成残行——模型
-        # 看到"[截断 N 字符]"以为漏内容，反复折返重读同一 offset、乱序跳读漏行）。
+        # 超过字符预算时逐行收缩，保证永远不返回被截断的半行源码。
         while rows:
             end = offset + len(rows) - 1
             header = f"[行 {offset}-{end} / 共 {total} 行]"
@@ -214,7 +207,7 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
             ok=False,
         )
 
-    # 全文（自动截断防上下文爆炸）
+    # 全文读取；超过上限时截断以控制上下文大小。
     if len(content) <= READ_FILE_CAP:
         return ToolResult(content, data={"source_returned": True})
     cap_note = (
@@ -271,7 +264,7 @@ def _search_file(workspace: Path, args: dict) -> ToolResult:
     except _re.error as e:
         return ToolResult(f"正则非法: {e}。若想搜普通文本（含特殊字符），请转义或用简单子串。")
     hits: list[str] = []
-    cap = 20  # 最多返回 20 条，防上下文爆炸
+    cap = 20  # 限制返回条数以控制上下文大小。
     ws_abs = workspace.resolve()
     for p in targets:
         try:
@@ -323,7 +316,7 @@ def _write_file(workspace: Path, args: dict) -> ToolResult:
     out = f"已写入 {path.relative_to(workspace)}（{len(content)} 字符）"
     if existed:
         out += "\n[提示] 请 run_tests 验证本次修改，测试全绿后才能完成。"
-    # 即时语法体检：.py 文件写坏（截断/拼错）立刻暴露，别等 run_tests 收集期才炸
+    # 即时语法检查：尽早暴露截断或拼写造成的 Python 语法错误。
     err = _syntax_check(path, content)
     if err:
         out += "\n" + err
@@ -369,16 +362,13 @@ def _edit_file(workspace: Path, args: dict) -> ToolResult:
 
 
 def _run_tests(workspace: Path, args: dict) -> ToolResult:
-    """沙箱跑 pytest，输出结构化病灶（红 N 条/文件:行/断言消息）。"""
+    """在沙箱中运行 pytest，返回失败数、文件位置和断言摘要。"""
     parsed = run_pytest(workspace)
     return ToolResult(format_for_llm(parsed), ok=parsed["ok"], data=parsed)
 
 
-# ---------- GitHub 交付工具（2026-09-08，对标 MyCoder GitHub mode） ----------
-# 把"自修到全绿"升级为"自修到交付"：branch → commit → push → PR 全链由 agent 自己走。
-# workspace = 交付仓库的独立 clone（沙箱跑测试，git 动作在真实目录执行）。
-# 所有工具 handler 首行自检门闩：HARNESS_GITHUB != "1" → ToolError（loop 转 ok=False
-# 喂回模型，不崩局）。子进程环境剔除代理（直连 GitHub）+ 带 GH_CONFIG_DIR（gh 凭证）。
+# ---------- GitHub 交付工具 ----------
+# 交付在独立 clone 中完成 branch → commit → push → PR；普通修复模式无法调用。
 
 _BRANCH_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
 
@@ -426,7 +416,7 @@ def _current_branch(workspace: Path) -> str:
     """当前分支名（symbolic-ref：unborn/正常分支都返回名字；detached/非仓库才报错）。
 
     不用 rev-parse --abbrev-ref HEAD：它遇到 unborn 分支输出 "HEAD" 且退出码非零，
-    语义含糊（曾把"分支 ref 写入丢失"误报成"不是 git 仓库"，见 git_push 首局失败）。
+    语义含糊，无法区分未出生分支与非仓库目录。
     """
     r = _run_git(workspace, ["symbolic-ref", "--short", "HEAD"])
     if not r.ok or not r.output.strip():
@@ -440,8 +430,7 @@ def _current_branch(workspace: Path) -> str:
 def _head_sha(workspace: Path) -> str:
     """HEAD 解析出的 commit sha；unborn / 零 oid 残留 / detached 一律返回空串。
 
-    不能只看 rc：竞态残留的零 oid ref 文件会让 `rev-parse --verify HEAD`
-    返回 0 且输出 40 个 0（假 born，单测实证）——必须同时查 sha 非空非全零。
+    不能只看返回码：竞态残留的零 oid ref 可能输出 40 个 0，必须同时校验 sha。
     """
     r = _run_git(workspace, ["rev-parse", "HEAD"])
     sha = r.output.strip() if r.ok else ""
@@ -451,15 +440,10 @@ def _head_sha(workspace: Path) -> str:
 
 
 def _ensure_branch_born(workspace: Path, branch: str, base_sha: str) -> None:
-    """校验"分支确实建出来且有 commit"，否则自修复，再失败才抛错。
+    """确保检出的分支指向有效 commit，必要时用基线 sha 修复分支引用。
 
-    背景（2026-09-08 真机首局实证）：Windows + git 2.55 下偶发竞态——
-    `git checkout -b` 返回成功、reflog 也写了，但 refs/heads/<branch> 没落地
-    （unborn，或残留零 oid 文件），随后 rev-parse HEAD / git log 全部失败，
-    push 无从谈起（约 1/25 采样率，无法稳定复现，纯环境层）。
-    对策：检出后立即用 _head_sha 验证真的 born；unborn 就用 update-ref 把 ref
-    补到 base_sha。【不要】用 branch --list 判空做守卫——竞态残留的零 oid ref
-    会被列出，反而把修复挡在门外（真机第二轮 7 连败实证）。补不上才 raise。
+    某些 Git/文件系统组合可能在 checkout 成功后留下 unborn 或零 oid 引用。
+    branch --list 仍会列出这种损坏引用，因此必须直接校验 HEAD。
     """
     if _head_sha(workspace):
         return  # 真正 born（有非零 commit）
@@ -486,11 +470,7 @@ def _ensure_branch_born(workspace: Path, branch: str, base_sha: str) -> None:
 
 
 def _git_branch(workspace: Path, args: dict) -> ToolResult:
-    """从当前 HEAD 新建并切换到分支（已存在则直接切）。
-
-    检出后走 _ensure_branch_born 校验 + unborn 自修复（Windows git 偶发 ref 写入
-    丢失竞态，真机首局实证——不加校验，push 会在 unborn 分支上直接失败）。
-    """
+    """从当前 HEAD 新建并切换分支；检出后校验分支引用。"""
     _require_github_mode()
     branch = str(args.get("branch", "")).strip()
     if not branch:
@@ -502,9 +482,7 @@ def _git_branch(workspace: Path, args: dict) -> ToolResult:
     cur = _current_branch(workspace)
     if cur == branch:
         return ToolResult(f"已在分支 {branch}（无需切换）。")
-    # 基线 commit（unborn 竞态修复用：把分支补建到基线 sha 上）。
-    # 注意：若上一次 checkout 已把 HEAD 卡在 unborn 分支（本地 rev-parse HEAD 失败），
-    # 兜底用 origin/main（clone 的远端基线）——真机第二轮实证：7 连败后 commit 才救回。
+    # HEAD 无法解析时使用 origin/main 作为修复 unborn 分支的基线。
     base = _run_git(workspace, ["rev-parse", "HEAD"])
     base_sha = base.output.strip() if base.ok else ""
     if not base_sha:
@@ -549,7 +527,7 @@ def _git_commit(workspace: Path, args: dict) -> ToolResult:
         raise ToolError(f"git add 失败: {add.output[:300]}")
     r = _run_git(workspace, ["commit", "-m", msg])
     if not r.ok and ("user.name" in r.output or "user.email" in r.output):
-        # 兜底：clone 未配身份时用本地身份补一次（只写本仓库 local config，不碰全局）
+        # clone 未配身份时只设置当前仓库的本地身份，不修改全局配置。
         _run_git(workspace, ["config", "user.name", "codecraft-agent"])
         _run_git(workspace, ["config", "user.email", "agent@codecraft.local"])
         r = _run_git(workspace, ["commit", "-m", msg])
@@ -557,7 +535,7 @@ def _git_commit(workspace: Path, args: dict) -> ToolResult:
         raise ToolError(f"git commit 失败: {r.output[:300]}")
     branch = _current_branch(workspace)
     if not _run_git(workspace, ["rev-parse", "--verify", "HEAD"]).ok:
-        # unborn 竞态：commit 对象与 reflog 都写了，但分支 ref 没落地 → 从输出补 ref
+        # commit 已生成但分支引用未落地时，从输出恢复引用。
         m = re.search(r"([0-9a-f]{7,40})\] ", r.output)
         if m:
             full = _run_git(workspace, ["rev-parse", m.group(1)])
@@ -599,9 +577,7 @@ def _git_push(workspace: Path, args: dict) -> ToolResult:
 def _find_gh() -> str:
     """定位 gh CLI：PATH → GH_BIN 环境变量 → 本项目惯例安装位。找不到抛 ToolError。
 
-    真机实证（第二轮）：drive_task 进程 PATH 不含 gh（装在 ~/.workbuddy/binaries/gh），
-    subprocess 裸调 "gh" 报 [WinError 2]。交付模式启动方（drive_task/用户）也可用
-    GH_BIN 显式指路。
+    部分启动环境不会继承用户安装目录，因此同时支持 GH_BIN 和项目惯例安装位。
     """
     import shutil
 
@@ -749,14 +725,13 @@ TOOLS: dict[str, ToolSpec] = {
         perm=Perm.MED,
         handler=_gh_create_pr,
     ),
-    # HIGH 占位（M2 接线）：模型请求 → loop 走 approval.deny_high_tool 拒绝 + 审计记录。
-    # handler 永远不被执行（_run_loop 在 perm>=HIGH 时先拦截），留它只为注册表完整性。
+    # HIGH 工具由执行循环先行拒绝并记录；handler 仅保持注册表合同完整。
     "install_package": ToolSpec(
         name="install_package",
-        description="[高危] 在任务环境安装第三方 Python 包（工作区外副作用，需人工审批；MVP 一律拒绝）",
+        description="[高危] 在任务环境安装第三方 Python 包（工作区外副作用，需人工审批；当前策略一律拒绝）",
         args_hint='{"package": "numpy"}',
         perm=Perm.HIGH,
-        handler=lambda ws, args: ToolResult("不会执行：HIGH 工具需审批（M2 一律拒绝）"),
+        handler=lambda ws, args: ToolResult("不会执行：HIGH 工具需审批，当前策略一律拒绝"),
     ),
 }
 
@@ -770,7 +745,7 @@ def list_tool_names() -> list[str]:
 
 
 def register_mcp_tools(server_name: str, client, tools: list) -> int:
-    """把 MCP server 拉到的工具动态注册进 TOOLS（M5-B2）。
+    """把 MCP server 返回的工具动态注册进 TOOLS。
 
     命名空间: `mcp_<server>__<tool>`（例 mcp_demo__sqlite_query），与本地工具
     同表同源——describe_tools / get_tool / 审计 trace 全走同一注册表，决策协议

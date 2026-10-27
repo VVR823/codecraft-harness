@@ -1,4 +1,4 @@
-"""GitHub 交付四工具（git_branch/commit/push + gh_create_pr）单测（2026-09-08）。
+"""GitHub 交付工具（git_branch/commit/push + gh_create_pr）单测。
 
 - 环境门闩：HARNESS_GITHUB != "1" → 四个工具一律 ToolError（loop 转 ok=False 喂回模型），
   基线 run（不开 --github）的提示词/工具面不受污染。
@@ -92,7 +92,7 @@ def test_github_tools_registered_med():
 
 
 def test_github_tools_in_protocol_whitelist():
-    """协议白名单漏加 = 模型调用被打回（T4 search_file 教训），四个新工具必须在枚举里。"""
+    """四个交付工具必须同时加入协议白名单。"""
     for name in GIT_TOOLS:
         step = parse_step(f'{{"thought": "t", "tool": "{name}", "args": {{}}, "done": false}}')
         assert step.tool_name == name
@@ -180,7 +180,7 @@ def test_git_commit_auto_identity_fallback(repo_no_identity, monkeypatch):
     assert author == "codecraft-agent"
 
 
-# ---------- unborn 竞态自修复（Windows git 偶发 ref 写入丢失，真机首局实证） ----------
+# ---------- unborn 分支引用恢复 ----------
 
 
 def _orphan_branch(repo, name):
@@ -213,8 +213,8 @@ def test_ensure_branch_born_repairs_unborn(repo):
 def test_ensure_branch_born_repairs_zero_ref(repo):
     """竞态残留"零 oid ref 文件"（branch --list 列得出）也要修复——旧守卫会挡掉。
 
-    真机第二轮实证：checkout -b 偶发留下 unborn + 零 oid 残留，旧逻辑因
-    branch --list 非空跳过 update-ref → 7 连败。修复=不看列表，unborn 即补。
+    checkout -b 可能留下 unborn 分支和零 oid 残留。恢复逻辑应以 HEAD 是否可解析
+    为准，而不是依赖 branch --list 的结果。
     """
     base = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True

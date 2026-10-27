@@ -1,8 +1,8 @@
-"""pytest 输出结构化解析（Q14/执行计划 §4 verifier/pytest_runner.py）。
+"""将 pytest 输出解析为结构化失败信息。
 
 问题：原始 pytest 输出是给人类看的日志，喂给 LLM 又占 token 又难定位。
-方案：把 pytest 输出解析成结构化失败信息——"哪个测试挂了、哪个文件第几行、
-断言说了什么"，LLM 一眼看到病灶。
+方案：把 pytest 输出解析成结构化失败信息，包括失败测试、文件位置和断言摘要，
+便于决策器定位问题并减少上下文占用。
 
 依赖沙箱跑出来的文本格式（pytest -q --tb=line）：
     .F
@@ -177,7 +177,7 @@ def _recovery_diagnostic_hint(failure: dict) -> str:
 
 
 def format_for_llm(parsed: dict, max_failures: int = 6) -> str:
-    """把结构化结果压成给 LLM 的紧凑文本（几行内说清病灶）。"""
+    """把结构化结果压成供决策器使用的紧凑故障摘要。"""
     if parsed.get("timed_out"):
         return f"run_tests 超时(>{parsed.get('timeout_s', '?')}s 已强杀)。建议检查是否有死循环或卡死测试。"
     if parsed["exit_code"] is None:

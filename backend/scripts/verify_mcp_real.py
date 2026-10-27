@@ -1,9 +1,8 @@
-"""MCP 真实生态验证（2026-09-09，W14）：自研 client 对接官方 server。
+"""验证本项目 MCP 客户端与官方参考服务的兼容性。
 
-验证目标：自研 stdio MCP client（app/mcp/mcp_client.py，不引官方 SDK）能否
+验证目标：stdio MCP client（app/mcp/mcp_client.py，不引官方 SDK）能否
 对接**真实第三方 MCP server**——官方 @modelcontextprotocol/server-everything
-（MCP 参考实现，暴露 echo/add 等无副作用工具）。之前 M5 只对过自研 demo
-server，生态兼容性是空口；本脚本补上真机证据。
+（MCP 参考实现，暴露 echo/add 等无副作用工具）。
 
 用法：
   1. 装官方 server（首次）：cd backend/.mcp-verify && npm install @modelcontextprotocol/server-everything

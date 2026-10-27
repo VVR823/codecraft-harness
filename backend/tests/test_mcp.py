@@ -1,4 +1,4 @@
-"""M5-B2 MCP 单测：client 握手/工具发现/调用（连真 demo server）+ 协议放行 + 注册表路由。"""
+"""MCP 客户端握手、工具发现、调用、协议放行与注册表路由测试。"""
 
 import sys
 from pathlib import Path
@@ -123,14 +123,14 @@ def test_start_recovers_after_broken():
     c.stop()
 
 
-# ---------- 服务端主动推送通知帧（W14 官方 server 对接实证） ----------
+# ---------- 服务端主动推送通知帧 ----------
 
 
 def test_client_skips_server_push_notifications():
     """server 响应前先推 notifications/tools/list_changed → client 须跳帧等真响应。
 
-    2026-09-09 官方 everything server 对接暴露：旧实现把推送帧当 tools/list
-    响应读（无 id 无 result）→ 拿到 0 工具。修复 = 循环读到 id 匹配才返回。
+    客户端不能把无 id 的通知帧误当作 tools/list 响应；必须继续读取，直到收到
+    与请求 id 匹配的响应。
     """
     py = sys.executable
     server_py = Path(__file__).resolve().parent / "fixtures" / "notify_server.py"
@@ -192,7 +192,7 @@ def test_register_mcp_tools_into_registry(client: MCPClient):
 
 
 def test_loop_mcp_system_prompt_includes_tool():
-    """use_mcp=True 的 loop，初始 system 说明书含 mcp_ 工具；False 不含（口径不动）。"""
+    """启用 MCP 时注入动态工具说明；关闭时保持基础工具集合。"""
     from app.runtime.loop import HarnessLoop
     from app.mcp.mcp_client import spawn_client
 

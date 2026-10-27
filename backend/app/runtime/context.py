@@ -1,4 +1,4 @@
-"""分层上下文压缩（Q14，M3 数字③）。
+"""为决策循环提供分层上下文压缩。
 
 策略（简单分层，不引向量库/RAG）：
 - system 提示 + 任务目标：永远全文保留
@@ -42,7 +42,7 @@ def _decision(msg: dict) -> dict:
 
 
 def estimate_tokens(text: str) -> int:
-    """本地粗 token 估算（每 2 字符 ≈ 1 token；压缩率分母分子同口径，比率基本不受估算法影响）。"""
+    """本地粗略估算 token；压缩前后采用同一算法以保持比率可比。"""
     return max(1, math.ceil(len(text or "") / 2))
 
 

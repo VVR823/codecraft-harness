@@ -1,4 +1,4 @@
-"""llm.py 韧性层单测（O1，2026-09-05）。
+"""llm.py 韧性层单测。
 
 覆盖：错误分级（1302/429/空内容）、分级退避、跨调用熔断、成功清零、请求限速。
 不碰真网络——monkeypatch llm._call_once 抛/成功，llm.time.sleep 变 no-op（记参数）。
@@ -103,7 +103,7 @@ def test_retry_exhausted_raises_with_streak(_reset_state, monkeypatch):
 
 
 def test_circuit_breaker_after_streak(_reset_state, monkeypatch):
-    """上一轮已 3 连败（streak=3），本次第一次失败就熔断硬冷却 300s。"""
+    """连续失败计数达到 3 后，下一次失败触发 300 秒冷却。"""
     llm._fail_streak = 3  # 模拟上次调用耗尽重试
 
     def always_fail(*a, **k):
@@ -117,7 +117,7 @@ def test_circuit_breaker_after_streak(_reset_state, monkeypatch):
 
 
 def test_success_resets_streak_across_calls(_reset_state, monkeypatch):
-    """跨调用：上轮连败 streak=3，本轮第一次就成功 → streak 清零，不再熔断。"""
+    """后续调用成功后清零连续失败计数。"""
     llm._fail_streak = 3
 
     def ok(*a, **k):
@@ -140,7 +140,7 @@ def test_throttle_sleeps_on_fast_calls(_reset_state, monkeypatch):
     assert _reset_state["sleeps"][-1] > 1.0
 
 
-# ---------- O6+ 单次调用看门狗（T4 第六次 50min 僵尸 run 实证补） ----------
+# ---------- 单次调用总超时 ----------
 
 
 def test_call_timeout_watchdog(_reset_state, monkeypatch):

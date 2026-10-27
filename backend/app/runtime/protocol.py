@@ -1,11 +1,10 @@
-"""agent 决策协议（Q11）：LLM 每步输出一段 JSON，我们校验后执行。
+"""Agent 决策协议：模型每步输出一段经过校验的 JSON。
 
 协议：{"thought": str, "tool": "read_file|edit_file|write_file|run_tests", "args": {...}, "done": bool}
 - done=True 时本轮结束（tool/args 可空）。
-- 解析策略：允许模型包 ```json 代码块，剥掉后取最外层 {...}；解析/校验失败抛 StepParseError，
-  由 loop 触发重试（最多 LLM_RETRY 次，Q11）。
-- Day5+ 演进：新增 edit_file（旧→新片段替换）——改已有代码时模型只需输出改动片段，
-  不用整文件 JSON 转义（免费模型写长 content 的翻车点）。
+- 允许模型包裹 ```json 代码块，剥离后提取最外层对象。
+- 解析或字段校验失败时抛 StepParseError，由执行循环做有限重试。
+- edit_file 使用旧片段到新片段的精确替换，避免为局部修改传输整个文件。
 """
 
 from __future__ import annotations
@@ -23,21 +22,16 @@ class Tool(str, Enum):
     edit_file = "edit_file"
     write_file = "write_file"
     run_tests = "run_tests"
-    search_file = "search_file"  # T4 真实库定位（2026-09-06 registry 已注册+prompt 已教，
-    # 但协议白名单漏加——模型每次调 search_file 都被
-    # '未知工具'打回，被迫退回逐页 read_file。run7~10 四连
-    # '模型不听话'的真根因，2026-09-07 补）
-    install_package = "install_package"  # M2：HIGH 权限占位，请求即审批拒绝+审计
-    # GitHub 交付四件套（2026-09-08，对标 MyCoder GitHub mode；registry 已注册、
-    # 权限 MED + handler 内环境门闩 HARNESS_GITHUB，drive_task --github 才放行）。
-    # 与 search_file 同款教训：协议白名单漏加 = 模型每次调用都被打回。
+    search_file = "search_file"  # 在大仓库中先定位匹配行，再按区间读取源码
+    install_package = "install_package"  # HIGH 权限占位，请求会进入审批拒绝与审计流程
+    # GitHub 交付工具由注册表和 HARNESS_GITHUB 门闩共同限制。
     git_branch = "git_branch"  # 新建/切换分支（交付隔离）
     git_commit = "git_commit"  # 提交工作区全部改动
     git_push = "git_push"  # 推送当前分支到 origin
     gh_create_pr = "gh_create_pr"  # 开 PR 到 main
 
 
-MCP_PREFIX = "mcp_"  # M5-B2：MCP 动态工具命名空间前缀（mcp_<server>__<tool>）
+MCP_PREFIX = "mcp_"  # MCP 动态工具命名空间前缀（mcp_<server>__<tool>）
 
 
 class AgentStep(BaseModel):
@@ -55,7 +49,7 @@ class AgentStep(BaseModel):
     @field_validator("tool")
     @classmethod
     def _tool_must_be_known_or_mcp(cls, v):
-        """工具白名单：内置枚举 或 MCP 前缀动态工具（M5-B2）。
+        """工具白名单：内置枚举或带 MCP 前缀的动态工具。
 
         内置工具仍走 Tool 枚举强校验（防模型幻觉乱拼名字）；
         MCP 工具是运行时从 server 拉取注册的，枚举无法静态穷举，
@@ -134,7 +128,7 @@ _FIRST_OBJECT = re.compile(r"(\{.*\})", re.S)  # 与 _JSON_BLOCK 一致带捕获
 def extract_json_object(text: str) -> str:
     """从模型输出里剥出最外层 {...} 的 JSON 文本；找不到抛 StepParseError。
 
-    供 parse_step（每步决策）与 parse_plan（M4 planner 计划）共用——两种解析
+    供 parse_step（每步决策）与 parse_plan（planner 计划）共用——两种解析
     都容忍模型包 ```json 代码块 / 前后夹带自然语言。
     """
     if not text or not text.strip():

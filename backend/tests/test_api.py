@@ -1,4 +1,4 @@
-"""W13 Web 控制台 API 测试（隔离库 + TestClient，不真跑 LLM run）。
+"""Web 控制台 API 测试（隔离库 + TestClient，不调用真实模型）。
 
 覆盖：
 - GET /api/packs   任务包清单（tasks/ 下含 README 的目录）

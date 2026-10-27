@@ -1,4 +1,4 @@
-"""MCP demo server（M5-B2，stdio transport，自研）。
+"""基于 stdio transport 的最小 MCP 示例服务。
 
 演示能力：暴露一个只读工具 `sqlite_query`——在**指定白名单目录**内执行只读
 SQLite 查询（SELECT），供 agent 当"外部数据源"调用。权限上对齐本地工具分级：
@@ -44,7 +44,7 @@ _TOOLS = [
 
 
 def _read_frame() -> dict | None:
-    """读一帧：jsonl 一行 = 一个 JSON 消息（MCP 2025-03-26+ stdio 帧格式）。"""
+    """读取一帧：JSONL 的每一行对应一条 JSON 消息。"""
     line = sys.stdin.readline()
     if not line:
         return None  # EOF：client 关闭
