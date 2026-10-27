@@ -1,12 +1,12 @@
 # CodeCraft验证方式与证据
 
-2026-10-26反馈通道追加修复：本地358PASS/1SKIP、88.01%；pytest反馈与读取预算共15项新回归，最后有限独立复核无新确定P1/P2。最终源码同题模型复验内存预检未启动，仍待验证。详见[修复报告](pytest-feedback-2026-10-26.md)和[机器证据](evidence/pytest-feedback-2026-10-26.json)；云CI须核对本次精确提交，旧结果不证明新源码。
+2026-10-27最新记录：恢复链路源码导航、测试断言上下文和失败续读已完成本地门禁，412PASS/1SKIP、覆盖率88.93%，详见[本轮验收](recovery-navigation-and-real-model-2026-10-27.md)。同版本地7B真实任务因预算暂停且无补丁，保留为未通过；下文历史结果不代表本次重跑。
 
-2026-10-26更新：最新失败恢复修复与[真实仓库单次验收](real-repository-2026-10-26.md)已纳入此次发布包。2026-10-25真实模型固定集为2/3，旧3/3仍是历史版本证据。本次源码身份/发布前门禁见[来源报告](evidence/publication-source-2026-10-26.json)，云CI以[对应提交工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)为准；下文旧日期的“本次/当前”只指该日期的验收，不能替代最新验证。
+2026-10-25追加验收已完成：当前源码真实模型固定集2/3，T3预算暂停；真实GitHub PR工具经固定控制器完成远端验收。详见[新版验收](real-acceptance-2026-10-25.md)，旧工程门禁和模型证据按原日期保留。
 
-所有核心回归使用临时数据库、私有工作区、固定决策器或模型MockTransport，质量门禁不调用模型。后续单独授权的本地模型尝试见[真实验收](local-acceptance-2026-10-20.md)；历史公开源码/静态页与云CI见[公开交付](cloud-publication-2026-10-21.md)。本轮未调用远端模型；修复随本次源码更新同步。离线演示与真实模型评测必须分开解读。
+所有核心回归使用临时数据库、私有工作区、固定决策器或模型MockTransport，质量门禁不调用模型。后续单独授权的本地模型尝试见[真实验收](local-acceptance-2026-10-20.md)；历史公开源码/静态页与云CI见[公开交付](cloud-publication-2026-10-21.md)。本轮未调用远端模型；修复已同步，见[云CI](https://github.com/VVR823/codecraft-harness/actions/runs/39806564977)。离线演示与真实模型评测必须分开解读。
 
-2026-10-22全面自检：11处问题已复现并修复，Windows完整门禁332PASS/1SKIP、81.02秒、87.69%；Linux333PASS/0SKIP、48.10秒、87.80%；两者均无告警，Ruff、102文件格式和14模块mypy通过，原覆盖率门槛未变。JS8PASS，Windows现有官方MCP参考server握手/list/中文echo/get-sum通过。真实Edge认证、三项离线任务、下载补丁原始副本2/4/5PASS及人工预算恢复通过。详情与限制见[自检报告](self-audit-2026-10-22.md)。以上为本地验收结果；本次同步触发的云CI以工作流结果为准，未做真实模型试跑。
+2026-10-22全面自检：11处问题已复现并修复，Windows完整门禁332PASS/1SKIP、81.02秒、87.69%；Linux333PASS/0SKIP、48.10秒、87.80%；两者均无告警，Ruff、102文件格式和14模块mypy通过，原覆盖率门槛未变。JS8PASS，Windows现有官方MCP参考server握手/list/中文echo/get-sum通过。真实Edge认证、三项离线任务、下载补丁原始副本2/4/5PASS及人工预算恢复通过。详情与限制见[自检报告](self-audit-2026-10-22.md)。以上为本地自检成绩；修复已同步，新云CI三项通过（quality (windows-latest)：333PASS/0SKIP、87.73%、JS8PASS、官方MCP通过；quality (ubuntu-latest)：333PASS/0SKIP、87.73%、JS8PASS、官方MCP通过，Docker完整构建/UID10001/离线SDK通过）。未做真实模型试跑。
 
 2026-10-21历史Linux门禁：在源码白名单副本和独立Linux卷执行scripts/check.py，287PASS/0SKIP、45.91秒、覆盖率88.71%，Ruff/97文件格式/14模块mypy通过。真实Compose构建、非root、health/ready、离线任务/导出、保卷换容器以及Windows HTTP访问均通过。日志`.cache/optimization/container-linux-20261021/`；[完整范围与失败处置](container-validation-2026-10-21.md)。这是本地Linux容器实测，不是云CI或真实模型评测。
 
@@ -94,8 +94,8 @@ python scripts/verify_mcp_real.py
 
 ## 本轮证据与未执行项
 
-阶段日志按`.cache/optimization/R1`至`E5`保留；最新次数和最终审查结论见[交付记录](delivery-2026-10-19.md)及本地进度账本。清洁Windows venv仅装运行依赖时27项SDK/Mock/运行服务回归通过。Windows符号链接SKIP历史保留；2026-10-21已在Linux实跑该用例，完整287PASS、无SKIP。
+阶段日志按`.cache/optimization/R1`至`E5`保留；公开结论见[交付记录](delivery-2026-10-19.md)及各日期验收文档。清洁Windows venv仅装运行依赖时27项SDK/Mock/运行服务回归通过。Windows符号链接SKIP历史保留；2026-10-21已在Linux实跑该用例，完整287PASS、无SKIP。
 
-最新本地3B/T1单次真实验收已done/verified=true，原2测试通过、预算内完成；详见[真实记录](local-acceptance-2026-10-20.md)。这不代表其他任务或模型均通过。原计划逐项状态见[验收矩阵](acceptance.md)。未执行：任何远端模型、真实GitHub PR交付工具验收，以及本轮修复后的真实模型复测。Docker完整构建/卷重建、Linux与公网源码/静态页已有2026-10-21历史证据；本轮容器复验范围以自检报告为准。进程级复制执行不隔离恶意Python；上线或接收不可信代码需要另外设计操作系统级隔离。
+最新本地3B/T1单次真实验收已done/verified=true，原2测试通过、预算内完成；详见[真实记录](local-acceptance-2026-10-20.md)。这不代表其他任务或模型均通过。原计划逐项状态见[验收矩阵](acceptance.md)。截至2026-10-25，真实本地模型新版复测与GitHub PR工具验收已完成并如实记录；未执行远端模型或模型自主PR交付验收。Docker完整构建/卷重建、Linux与公网源码/静态页已有2026-10-21历史证据；本轮容器复验范围以自检报告为准。进程级复制执行不隔离恶意Python；上线或接收不可信代码需要另外设计操作系统级隔离。
 
 运行与恢复操作见[operations.md](operations.md)，机制与取舍见[architecture.md](architecture.md)。

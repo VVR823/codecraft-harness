@@ -215,6 +215,26 @@ def test_search_file_locates_definitions(tmp_path):
     assert "不能为空" in r.output
 
 
+def test_missing_file_suggests_matching_repository_path(tmp_path):
+    """A basename-only guess should lead the model to the real nested file."""
+    from app.tools import registry
+
+    nested = tmp_path / "backend" / "app" / "runtime"
+    nested.mkdir(parents=True)
+    (nested / "loop.py").write_text("def resume():\n    pass\n", encoding="utf-8")
+
+    try:
+        registry._read_file(tmp_path, {"path": "loop.py"})
+    except registry.ToolError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing read_file path must still be rejected")
+    assert "backend\\app\\runtime\\loop.py" in message or "backend/app/runtime/loop.py" in message
+
+    result = registry._search_file(tmp_path, {"pattern": "resume", "path": "loop.py"})
+    assert "backend\\app\\runtime\\loop.py" in result.output or "backend/app/runtime/loop.py" in result.output
+
+
 # ---------- 顺序翻页护栏（T4 run7 实证补：逐页通读大文件 → 上下文臃肿 → JSON 崩坏） ----------
 
 

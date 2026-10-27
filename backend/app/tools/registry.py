@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -89,13 +90,76 @@ def _path_in_workspace(workspace: Path, rel: str) -> Path:
     return p
 
 
+def _missing_file_message(workspace: Path, rel: str) -> str:
+    """Return a bounded, actionable hint for a basename-only model guess."""
+    name = Path(rel).name.casefold()
+    if not name:
+        return f"文件不存在: {rel}"
+    matches: list[str] = []
+    root = workspace.resolve()
+    ignored = {".git", "__pycache__", ".venv", "node_modules"}
+    for directory, child_dirs, filenames in os.walk(root):
+        child_dirs[:] = [child for child in child_dirs if child not in ignored]
+        for filename in filenames:
+            if filename.casefold() != name:
+                continue
+            relative = (Path(directory) / filename).relative_to(root)
+            matches.append(relative.as_posix())
+            if len(matches) >= 5:
+                break
+        if len(matches) >= 5:
+            break
+    if not matches:
+        return f"文件不存在: {rel}"
+    return f"文件不存在: {rel}。仓库中同名文件: {', '.join(matches)}；请使用上面的完整相对路径重试。"
+
+
 # ---------- handlers ----------
 
 
+def _python_outline(content: str) -> str:
+    """Bounded locations only: never execute source or replace its actual body."""
+    try:
+        tree = ast.parse(content)
+    except (SyntaxError, ValueError, RecursionError):
+        return ""
+    definitions = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions.append((node.name, node))
+        elif isinstance(node, ast.ClassDef):
+            for method in node.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    definitions.append((f"{node.name}.{method.name}", method))
+    if not definitions:
+        return ""
+    # AST counts physical newlines; paged reads also split form feeds and other
+    # Unicode separators. Report ranges in the same coordinates as those pages.
+    display_starts = [1]
+    for physical_line in content.split("\n"):
+        display_starts.append(display_starts[-1] + len((physical_line + "\n").splitlines()))
+    header = "[Python定义位置目录（不是正文）；按需 read_file offset=起始行 limit=行数]\n"
+    rows = []
+    size = len(header)
+    for name, node in definitions:
+        start = display_starts[node.lineno - 1]
+        end = display_starts[node.end_lineno] - 1
+        row = f"{name}: {start}-{end}\n"
+        # Reserve room for an honest omission count and the body separator.
+        if size + len(row) > 1100:
+            break
+        rows.append(row)
+        size += len(row)
+    omitted = len(definitions) - len(rows)
+    note = f"（省略 {omitted} 项定义；可用 search_file 定位）\n" if omitted else ""
+    return header + "".join(rows) + note + "[以下为文件开头片段]\n"
+
+
 def _read_file(workspace: Path, args: dict) -> ToolResult:
-    path = _path_in_workspace(workspace, str(args.get("path", "")))
+    rel = str(args.get("path", ""))
+    path = _path_in_workspace(workspace, rel)
     if not path.is_file():
-        raise ToolError(f"文件不存在: {path}")
+        raise ToolError(_missing_file_message(workspace, rel))
     content = path.read_text(encoding="utf-8", errors="replace")
     lines = content.splitlines()
     total = len(lines)
@@ -116,7 +180,8 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
     if offset > total:
         return ToolResult(
             f"offset={offset} 超出文件范围：该文件共 {total} 行（最后一行是第 {total} 行）。"
-            "往回读，或先确认你要找的内容在哪个区间。"
+            "往回读，或先确认你要找的内容在哪个区间。",
+            data={"source_returned": False},
         )
 
     if limit > 0:
@@ -140,7 +205,7 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
             out = header + "\n" + "\n".join(rows) + note
             # 行号和翻页提示也占预算，必须在消息层再次限长前一起计入。
             if len(out) <= READ_FILE_CAP:
-                return ToolResult(out)
+                return ToolResult(out, data={"source_returned": True})
             rows = rows[:-1]
         return ToolResult(
             f"第 {offset} 行单行内容连同行号提示超过 {READ_FILE_CAP} 字符上限，"
@@ -151,7 +216,7 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
 
     # 全文（自动截断防上下文爆炸）
     if len(content) <= READ_FILE_CAP:
-        return ToolResult(content)
+        return ToolResult(content, data={"source_returned": True})
     cap_note = (
         f"\n...[文件共 {total} 行 / {len(content)} 字符，超过单次读取上限，"
         "当前仅显示开头片段]...\n"
@@ -159,7 +224,15 @@ def _read_file(workspace: Path, args: dict) -> ToolResult:
         "用 search_file 直接定位（pattern 填关键词，path 填当前文件路径），"
         f"拿到文件:行号后，再 read_file 分页精读目标区间。"
     )
-    return ToolResult(content[: READ_FILE_CAP - len(cap_note)] + cap_note)
+    outline = _python_outline(content) if path.suffix == ".py" else ""
+    if outline:
+        # A directory is useful for choosing a range; the unrelated file prefix
+        # must not consume almost the entire small local model's context.
+        return ToolResult(
+            outline + content[:1200] + cap_note,
+            data={"source_returned": False, "python_navigation": outline.split("[以下为文件开头片段]", 1)[0]},
+        )
+    return ToolResult(outline + content[: READ_FILE_CAP - len(outline) - len(cap_note)] + cap_note)
 
 
 def _search_file(workspace: Path, args: dict) -> ToolResult:
@@ -178,7 +251,7 @@ def _search_file(workspace: Path, args: dict) -> ToolResult:
         p = _path_in_workspace(workspace, rel)
         targets = [p] if p.is_file() else []
         if not targets:
-            return ToolResult(f"文件不存在: {rel}")
+            return ToolResult(_missing_file_message(workspace, rel))
     else:
         # 无 path = 搜整个任务目录（排除 .git/__pycache__）
         targets = [

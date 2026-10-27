@@ -39,6 +39,29 @@ def test_real_long_pytest_name_keeps_location_and_assertion(tmp_path):
     assert "fresh read required after failed edit" in feedback
 
 
+def test_real_failure_includes_bounded_read_only_test_source_excerpt(tmp_path):
+    (tmp_path / "test_resume.py").write_text(
+        "def helper():\n"
+        "    return 'stale'\n\n"
+        "def test_resume_after_failed_edit():\n"
+        "    observed = helper()\n"
+        "    assert observed == 'fresh', 'resume must read current state'\n",
+        encoding="utf-8",
+    )
+    result = run_pytest(tmp_path)
+    failure = result["failures"][0]
+    excerpt = failure["test_source_excerpt"]
+    assert "def test_resume_after_failed_edit" in excerpt
+    assert "assert observed == 'fresh'" in excerpt
+    assert len(excerpt) <= 700
+    feedback = format_for_llm(result)
+    assert "测试源码节选（只读）" in feedback
+    assert "def test_resume_after_failed_edit" in feedback
+    assert "assert observed == 'fresh'" in feedback
+    assert "resume/restore/checkpoint/rebuild" in feedback
+    assert "不要先改拦截器或错误文案" in feedback
+
+
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_summary_without_message_keeps_parameter_spaces_and_does_not_invent_details(newline):
     nodeid = "tests/test_recovery.py::test_reads_again[label with spaces]"

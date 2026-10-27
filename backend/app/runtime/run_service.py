@@ -239,13 +239,18 @@ class RunService:
                         raise UsageUnknown()
                     if meter.total_tokens >= options.token_budget:
                         raise BudgetExhausted()
-                    request_id = uuid.uuid4().hex
                     phase = "plan" if messages[0]["content"] == PLAN_PROMPT else "execute"
+                    schema = (
+                        decision_schema(registry)
+                        if options.structured_output and phase == "execute"
+                        else None
+                    )
+                    request_id = uuid.uuid4().hex
                     db.begin_model_call(run_id, request_id, phase)
                     log_event("model_request", run_id=run_id, request_id=request_id)
                     try:
                         if options.structured_output and phase == "execute":
-                            reply = client.chat(messages, response_schema=decision_schema())
+                            reply = client.chat(messages, response_schema=schema)
                         else:
                             reply = client.chat(messages)
                     except Exception as exc:

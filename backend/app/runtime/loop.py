@@ -44,6 +44,7 @@ _SYSTEM_HEAD = """你是一个软件工程师 Agent，正在执行一个代码�
 - 当你确认任务已完成（测试全绿等），输出 {"thought": "...", "tool": null, "args": {}, "done": true}，不再调用工具。
 【工作方法】第一步 run_tests。根据失败信息，read_file 读取被测函数的实现文件（路径相对任务目录）。
 测试可读、只读；修实现，不改预期值。小文件读全文，大文件 search_file 定位后用 offset/limit 分页精读，避免重复通读。
+恢复/重启/断点类失败应先沿失败测试的调用链检查状态重建（resume/restore/checkpoint），不要先改下游拦截器或错误文案。
 【关键规则】已完整读取、无截断且不超过100行的小实现文件优先用 write_file，content 必须是修改后的文件全文。
 完整写回必须保留未修改的 import、函数与文档，不得省略内容；大文件或未完整读取的文件仍用局部 edit_file。
 edit_file 的 old 必须逐字复制原文且唯一；new 只替换 old 的范围，保留每行缩进，不要用完整函数替换函数体的一行。
@@ -535,7 +536,17 @@ class HarnessLoop:
             try:
                 # M3：开压缩时给 decider 的是"近 N 步全文 + 旧步摘要"视图（消息本体仍全量）
                 if self.context_compress:
-                    view = build_view(self.messages, self.keep_recent_steps)
+                    latest_test = next(
+                        (action for action in reversed(self.done_actions) if action["tool"] == "run_tests"),
+                        None,
+                    )
+                    view = build_view(
+                        self.messages,
+                        self.keep_recent_steps,
+                        latest_test=latest_test,
+                        last_write_step=self._last_write_step,
+                        actions=self.done_actions,
+                    )
                 else:
                     view = list(self.messages)
                 text = self.decider(view)

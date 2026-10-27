@@ -1,14 +1,16 @@
 # 原计划逐项验收
 
-2026-10-26反馈通道追加修复：本地358PASS/1SKIP、88.01%；pytest反馈与读取预算共15项新回归，最后有限独立复核无新确定P1/P2。最终源码同题模型复验内存预检未启动，仍待验证。详见[修复报告](pytest-feedback-2026-10-26.md)和[机器证据](evidence/pytest-feedback-2026-10-26.json)；云CI须核对本次精确提交，旧结果不证明新源码。
-
-2026-10-26更新：最新失败恢复修复与[真实仓库单次验收](real-repository-2026-10-26.md)已纳入此次发布包。2026-10-25真实模型固定集为2/3，旧3/3仍是历史版本证据。本次源码身份/发布前门禁见[来源报告](evidence/publication-source-2026-10-26.json)，云CI以[对应提交工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)为准；下文旧日期的“本次/当前”只指该日期的验收，不能替代最新验证。
+2026-10-27最新记录：恢复链路源码导航、测试断言上下文和失败续读已完成本地门禁，412PASS/1SKIP、覆盖率88.93%，详见[本轮验收](recovery-navigation-and-real-model-2026-10-27.md)。同版本地7B真实任务因预算暂停且无补丁，保留为未通过；下文历史结果不代表本次重跑。
 
 目标依据是[已批准设计](superpowers/specs/2026-10-19-engineering-hardening-design.md)及[实施总计划](superpowers/plans/2026-10-19-engineering-hardening.md)：零新增费用、可由他人自部署的单Agent代码修复应用。最初调研中的多Agent、Redis队列、RAG等已在批准设计中排除，不是待补的必选项。
 
-## 2026-10-22当前本地自检
+## 2026-10-25追加真实验收
 
-11项可复现缺陷已修复。Windows332PASS/1SKIP、87.69%，Linux333PASS/0SKIP、87.80%，均无告警；JS8PASS。实际Edge离线提交、下载补丁原副本回放、人工预算恢复、1280/375布局通过；当前源码容器非root冒烟通过。详见[完整自检](self-audit-2026-10-22.md)。本次源码同步包含修复，当前云CI见工作流；旧云CI与旧模型成绩不代表本轮新代码复验。
+新版真实7B固定三任务各一次：T1/T2通过，T3预算暂停、无有效补丁，本轮2/3、35428已知token/0未知。成功补丁原副本分别2/4PASS。真实PR工具通过固定控制器实测，PR #1只针对专用合成夹具分支，main未改。详见[新版验收](real-acceptance-2026-10-25.md)。旧3/3按旧源码保留，不推广为稳定成功率。
+
+## 2026-10-22历史本地自检
+
+11项可复现缺陷已修复。Windows332PASS/1SKIP、87.69%，Linux333PASS/0SKIP、87.80%，均无告警；JS8PASS。实际Edge离线提交、下载补丁原副本回放、人工预算恢复、1280/375布局通过；当前源码容器非root冒烟通过。详见[完整自检](self-audit-2026-10-22.md)。修复已同步公开提交1d10f75，新[云CI](https://github.com/VVR823/codecraft-harness/actions/runs/39806564977)三项通过；模型成绩仍按旧源码保留，本轮未做真实模型复测。
 
 ## 历史同配置真实固定集
 
@@ -84,6 +86,6 @@
 
 ## 达标边界
 
-已实现并验证本机适用的工程要求，交付路径为源码自部署应用、离线体验、只读案例和可核查评测。Docker运行与本地Linux Python门禁已追加实测；经用户追加授权，公开源码和 GitHub Pages 案例页已发布，Windows/Linux/Docker 云 CI 已运行；最新实际结论见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)和[交付入口](cloud-publication-2026-10-21.md)。GitHub PR 交付工具的真实远端验收仍未执行。Windows历史链接SKIP保留且Linux已补实测，模型效果限制继续保留，不做“所有环境全部通过”声明。
+已实现并验证本机适用的工程要求，交付路径为源码自部署应用、离线体验、只读案例和可核查评测。Docker运行与本地Linux Python门禁已追加实测；经用户追加授权，公开源码和 GitHub Pages 案例页已发布，Windows/Linux/Docker 云 CI 已运行；最新实际结论见[工作流](https://github.com/VVR823/codecraft-harness/actions/workflows/ci.yml)和[交付入口](cloud-publication-2026-10-21.md)。GitHub PR交付工具已于2026-10-25在专用合成夹具实测通过；固定控制器不是模型自主交付，见新版验收。Windows历史链接SKIP保留且Linux已补实测，模型效果限制继续保留，不做“所有环境全部通过”声明。
 
 该结论不等于生产级恶意代码隔离、任意模型稳定修复或求职者已掌握所有模块。当前同配置T1/T2/T3小集合各一次均有成功及独立补丁复验，旧不同模型/源码记录另行保留；稳定成功率、任意任务和其他硬件上的效果仍未证明。没有为补关键词扩展多Agent、分布式队列、GraphRAG或其他项目。

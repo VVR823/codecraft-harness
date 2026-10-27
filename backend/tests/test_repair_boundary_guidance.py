@@ -12,6 +12,8 @@ def test_repair_prompt_is_compact_and_excludes_disabled_delivery_tools(tmp_path)
     assert len(prompt) < 2200
     assert "git_push" not in prompt and "install_package" not in prompt
     assert "write_file" in prompt and "edit_file" in prompt
+    assert "恢复/重启/断点" in prompt and "状态重建" in prompt
+    assert "不要先改下游" in prompt
     delivery = HarnessLoop(tmp_path, "交付", lambda _: "", use_github=True)._system_prompt()
     assert "git_push" in delivery and "gh_create_pr" in delivery
 

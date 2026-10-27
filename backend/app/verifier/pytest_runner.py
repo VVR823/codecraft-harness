@@ -50,19 +50,45 @@ def parse_pytest_output(stdout: str, exit_code: int | None = None, timed_out: bo
     locations: dict[str | None, list] = {None: [], "ERROR": [], "FAILED": []}
     error_messages: list[list[str]] = []
     section = None
+    assertion_context = ""
+    captured_output = False
     for line in out.splitlines():
         heading = re.fullmatch(r"=+\s+(.+?)\s+=+", line)
         if heading:
             section = {"ERRORS": "ERROR", "FAILURES": "FAILED"}.get(heading.group(1), "IGNORE")
+            assertion_context = ""
+            captured_output = False
         if section == "IGNORE":
             continue
         if section == "ERROR" and re.match(r"^_+ ERROR\b", line):
             error_messages.append([])
+        if re.fullmatch(r"-+\s+Captured .+?\s+-+", line):
+            captured_output = True
+        if line.startswith("E "):
+            captured_output = False
+            assertion_context = ""
+        diagnostic = line.lstrip()
+        if diagnostic.startswith("E "):
+            diagnostic = diagnostic[2:].lstrip()
+        if not captured_output and (
+            diagnostic.startswith("assert ") or re.match(r"\+\s+where\b", diagnostic)
+        ):
+            # The last pytest evaluation line often contains the observed value.
+            # Keep a literal excerpt, never infer what an assertion evaluated to.
+            assertion_context = diagnostic
+            if len(assertion_context) > 600:
+                assertion_context = assertion_context[:593] + "…[已截断]"
         location = LOC_LINE.match(line)
         if location:
             locations[section].append(
-                (location.group(1).replace("\\", "/"), int(location.group(2)), location.group(3))
+                (
+                    location.group(1).replace("\\", "/"),
+                    int(location.group(2)),
+                    location.group(3),
+                    assertion_context,
+                )
             )
+            assertion_context = ""
         if section == "ERROR" and line.startswith("E "):
             if not error_messages:
                 error_messages.append([])
@@ -71,9 +97,11 @@ def parse_pytest_output(stdout: str, exit_code: int | None = None, timed_out: bo
         detail = ""
         available = locations[kind] or locations[None]
         if available:
-            path, line, detail = available.pop(0)
+            path, line, detail, context = available.pop(0)
             failure["line"] = line
             failure["file"] = path.rsplit("/", 1)[-1]
+            if context and context != detail.strip():
+                failure["assertion_context"] = context
         if kind == "ERROR" and error_messages:
             error_detail = "\n".join(error_messages.pop(0))
             detail = detail or error_detail
@@ -112,6 +140,42 @@ def parse_pytest_output(stdout: str, exit_code: int | None = None, timed_out: bo
     }
 
 
+def _attach_test_source_excerpts(parsed: dict, task_dir: Path) -> None:
+    """Attach a bounded literal excerpt when pytest located the failing test itself."""
+    root = task_dir.resolve()
+    for failure in parsed.get("failures", []):
+        line = failure.get("line")
+        node_path = str(failure.get("nodeid", "")).split("::", 1)[0]
+        if not isinstance(line, int) or not node_path:
+            continue
+        candidate = Path(node_path)
+        target = (candidate if candidate.is_absolute() else root / candidate).resolve()
+        if not target.is_relative_to(root) or target.suffix != ".py" or not target.is_file():
+            continue
+        if target.name != failure.get("file"):
+            continue
+        source = target.read_text(encoding="utf-8", errors="replace").splitlines()
+        start = max(1, line - 4)
+        end = min(len(source), line + 4)
+        excerpt = "\n".join(f"{number}: {source[number - 1]}" for number in range(start, end + 1))
+        if len(excerpt) > 700:
+            excerpt = excerpt[:693].rsplit("\n", 1)[0] + "\n…[已截断]"
+        failure["test_source_excerpt"] = excerpt
+
+
+def _recovery_diagnostic_hint(failure: dict) -> str:
+    """Point recovery failures at state reconstruction instead of a visible downstream symptom."""
+    evidence = " ".join(
+        str(failure.get(key, "")) for key in ("nodeid", "message", "assertion_context", "test_source_excerpt")
+    ).lower()
+    if not any(word in evidence for word in ("resume", "restore", "checkpoint", "断点", "恢复")):
+        return ""
+    return (
+        "  定位提示: 这是恢复/断点状态链路，先查 resume/restore/checkpoint/rebuild 调用链。"
+        "若断言里看到下游拦截器或错误文案，先把它当作状态重建错误的结果，不要先改拦截器或错误文案。"
+    )
+
+
 def format_for_llm(parsed: dict, max_failures: int = 6) -> str:
     """把结构化结果压成给 LLM 的紧凑文本（几行内说清病灶）。"""
     if parsed.get("timed_out"):
@@ -124,10 +188,25 @@ def format_for_llm(parsed: dict, max_failures: int = 6) -> str:
     if ok:
         return f"run_tests 全绿: {passed} passed" if passed is not None else "run_tests 全绿"
     lines = [f"run_tests 有红: {failed} failed, {passed if passed is not None else '?'} passed"]
+    source_excerpt_added = False
+    recovery_hint_added = False
     for f in parsed["failures"][:max_failures]:
         loc = f"{f['file']}:{f['line']}" if f["line"] else f["file"]
         msg = (f["message"] or "")[:200]
-        lines.append(f"- {f['nodeid']} ({loc}): {msg}")
+        context = " ".join((f.get("assertion_context") or "").split())
+        if len(context) > 400:
+            context = context[:393] + "…[已截断]"
+        extra = f"；断言现场节选: {context}" if context else ""
+        lines.append(f"- {f['nodeid']} ({loc}): {msg}{extra}")
+        excerpt = f.get("test_source_excerpt") or ""
+        if excerpt and not source_excerpt_added:
+            compact_excerpt = " | ".join(excerpt.splitlines())
+            lines.append(f"  测试源码节选（只读）: {compact_excerpt}")
+            source_excerpt_added = True
+        hint = _recovery_diagnostic_hint(f)
+        if hint and not recovery_hint_added:
+            lines.append(hint)
+            recovery_hint_added = True
     n = len(parsed["failures"])
     if n > max_failures:
         lines.append(f"... 另有 {n - max_failures} 个失败未列出")
@@ -165,6 +244,7 @@ def run_pytest(task_dir: str | Path, *, baseline_dir=None, timeout_s=120) -> dic
             }
     r = run_in_sandbox(task_dir, cmd=cmd, baseline_dir=baseline_dir, timeout=timeout_s)
     parsed = parse_pytest_output(r["stdout"], r["exit_code"], r["timed_out"])
+    _attach_test_source_excerpts(parsed, task_dir)
     parsed["duration_s"] = r["duration_s"]
     parsed["baseline_ok"] = True
     parsed["verified"] = bool(parsed["ok"] and not parsed["timed_out"] and (parsed["passed"] or 0) > 0)

@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from enum import Enum
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 
 class Tool(str, Enum):
@@ -44,6 +45,12 @@ class AgentStep(BaseModel):
     tool: Tool | str | None = Field(default=None, description="要调的工具；done=True 时可为空")
     args: dict = Field(default_factory=dict, description="工具参数")
     done: bool = Field(default=False, description="True=认为任务已完成")
+
+    @model_validator(mode="after")
+    def _unfinished_step_needs_tool(self):
+        if not self.done and self.tool is None:
+            raise ValueError("未完成的决策必须指定工具；只有done=true时tool才可为空")
+        return self
 
     @field_validator("tool")
     @classmethod
@@ -79,14 +86,41 @@ class AgentStep(BaseModel):
         return t.value if isinstance(t, Tool) else str(t)
 
 
-def decision_schema() -> dict:
-    """Constrain the decision envelope; registry validators still own tool/args safety."""
-    schema = AgentStep.model_json_schema()
-    schema["properties"]["tool"] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
-    schema.pop("$defs", None)
-    schema["required"] = ["thought", "tool", "args", "done"]
-    schema["additionalProperties"] = False
-    return schema
+def decision_schema(registry=None) -> dict:
+    """Local grammar: each tool owns its complete input contract; runtime rechecks it."""
+    from ..tools.registry import Perm, ToolRegistry
+
+    registry = registry if registry is not None else ToolRegistry()
+
+    def has_ref(value):
+        if isinstance(value, dict):
+            return "$ref" in value or any(has_ref(v) for v in value.values())
+        return isinstance(value, list) and any(has_ref(v) for v in value)
+
+    def branch(tool, args, done):
+        return {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string"},
+                "tool": {"const": tool},
+                "args": args,
+                "done": {"const": done},
+            },
+            "required": ["thought", "tool", "args", "done"],
+            "additionalProperties": False,
+        }
+
+    branches = [branch(None, {"type": "object", "properties": {}, "additionalProperties": False}, True)]
+    for spec in registry.tools.values():
+        if spec.perm >= Perm.HIGH:
+            continue
+        if registry.github is False and spec.name in ("git_branch", "git_commit", "git_push", "gh_create_pr"):
+            continue
+        if has_ref(spec.input_schema):
+            raise ValueError("工具 schema 不支持外部引用")
+        branches.append(branch(spec.name, deepcopy(spec.input_schema), False))
+    # llama.cpp cannot combine object properties with a union at the same level.
+    return {"oneOf": branches}
 
 
 class StepParseError(Exception):
